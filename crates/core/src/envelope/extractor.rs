@@ -544,11 +544,11 @@ pub async fn detach_and_store_attachments(
             stripped_eml.splice(raw_start..raw_end, placeholder.as_bytes().iter().cloned());
             Some(raw_hash)
         } else {
-            // Invalid range: store a zero-length blob so the consistency
-            // check passes; reattachment will log a warning for the missing
-            // blob data but won't panic.
-            attachments.push((content_hash.clone(), Bytes::new()));
-            None
+            // No replacement is needed, but keep the empty storage record in
+            // the raw key domain so it cannot shadow a decoded or email blob.
+            let raw_hash = crate::utils::compute_raw_attachment_hash(b"");
+            attachments.push((raw_hash.clone(), Bytes::new()));
+            Some(raw_hash)
         };
 
         let inline = att
@@ -871,6 +871,63 @@ async fn recover_message_blob(envelope: &Envelope) -> BichonResult<Bytes> {
 mod test {
     use html2text::config;
 
+    // Keep the blob writer alive across these storage tests.
+    static STORAGE_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
+        std::sync::LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
+
+    #[test]
+    fn empty_attachment_uses_the_raw_storage_key_space() {
+        STORAGE_RUNTIME.block_on(async {
+            let raw = b"From: test@example.com\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=empty.bin\r\n\r\n";
+            let message = mail_parser::MessageParser::new().parse(raw).unwrap();
+            let infos = super::detach_and_store_attachments(
+                raw, &message, &crate::utils::compute_content_hash(raw), 0, 0,
+            ).await;
+            assert_ne!(infos[0].storage_hash(), infos[0].content_hash);
+        });
+    }
+
+    #[test]
+    fn real_mime_attachments_round_trip_through_blob_storage() {
+        STORAGE_RUNTIME.block_on(async {
+            let raw = concat!(
+                "From: test@example.com\r\nMIME-Version: 1.0\r\n",
+                "Content-Type: multipart/mixed; boundary=bichon-test\r\n\r\n",
+                "--bichon-test\r\nContent-Type: text/plain\r\n\r\nBody\r\n",
+                "--bichon-test\r\nContent-Type: application/octet-stream\r\n",
+                "Content-Disposition: attachment; filename=plain.bin\r\n",
+                "Content-Transfer-Encoding: 7bit\r\n\r\nhello\r\n",
+                "--bichon-test\r\nContent-Type: application/octet-stream\r\n",
+                "Content-Disposition: attachment; filename=encoded.bin\r\n",
+                "Content-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n",
+                "--bichon-test\r\nContent-Type: application/octet-stream\r\n",
+                "Content-Disposition: attachment; filename=repeated.bin\r\n",
+                "Content-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n",
+                "--bichon-test--\r\n",
+            )
+            .as_bytes();
+            let message = mail_parser::MessageParser::new().parse(raw).unwrap();
+            let hash = crate::utils::compute_content_hash(raw);
+            let infos = super::detach_and_store_attachments(raw, &message, &hash, 0, 0).await;
+            assert_eq!(infos.len(), 3);
+            assert!(infos
+                .iter()
+                .all(|info| info.content_hash == infos[0].content_hash));
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                super::BLOB_MANAGER.drain(),
+            )
+            .await
+            .unwrap();
+            let stripped = super::BLOB_MANAGER.get_email(&hash).unwrap().unwrap();
+            let restored = super::reattach_parts(stripped.to_vec(), infos, |key| {
+                super::BLOB_MANAGER.get_attachment(key)
+            })
+            .unwrap();
+            assert_eq!(restored.as_ref(), raw);
+        });
+    }
+
     #[test]
     fn repeated_attachment_is_restored_once_per_placeholder() {
         let payload = b"BEGIN:VCALENDAR\r\nDESCRIPTION:Repeated invitation\r\nEND:VCALENDAR\r\n";
@@ -996,8 +1053,12 @@ mod test {
     /// Regression test for: "range end index X out of range for slice of
     /// length Y" panic caused by a malformed email whose attachment
     /// `raw_end_offset` exceeded the actual body size.
-    #[tokio::test]
-    async fn detach_attachments_bounds_check() {
+    #[test]
+    fn detach_attachments_bounds_check() {
+        STORAGE_RUNTIME.block_on(check_attachment_bounds());
+    }
+
+    async fn check_attachment_bounds() {
         let raw = concat!(
             "From: sender@example.com\r\n",
             "To: recipient@example.com\r\n",
