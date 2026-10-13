@@ -475,6 +475,23 @@ pub fn extract_references(message: &Message<'_>) -> Option<Vec<String>> {
     }
 }
 
+/// Prefix of the placeholder that replaces an attachment body inside a
+/// stripped EML. Full form: `<<BICHON_DETACH_HASH:{64 hex chars}>>`.
+///
+/// Which hash the 64 hex chars carry depends on when the record was written,
+/// so tooling that scans placeholders must consult the attachment metadata
+/// (`AttachmentInfo::raw_content_hash`) — the prefix alone cannot tell the
+/// domains apart, because both produce 64-character blake3 hex digests:
+///
+/// - **Current records** (`raw_content_hash` is `Some`): the
+///   domain-separated hash of the *original encoded* MIME body
+///   (`compute_raw_attachment_hash`). The blob is stored under the same key.
+/// - **Legacy records** (pre-#375, `raw_content_hash` is `None`): the plain
+///   hash of the *decoded* attachment contents (`compute_content_hash`),
+///   which is also the blob key. `AttachmentInfo::storage_hash()` selects
+///   the right one per record.
+pub const DETACH_PLACEHOLDER_PREFIX: &str = "<<BICHON_DETACH_HASH:";
+
 /// Decoded contents of an attachment selected for text extraction, collected
 /// while detaching so the extraction can run in one background batch.
 pub struct TextCandidate {
@@ -563,7 +580,7 @@ pub fn strip_attachment_bodies(
             blobs.push((raw_hash.clone(), Bytes::copy_from_slice(raw_bytes)));
 
             // Replace raw attachment content with a hash-based placeholder
-            let placeholder = format!("<<BICHON_DETACH_HASH:{}>>", &raw_hash);
+            let placeholder = format!("{DETACH_PLACEHOLDER_PREFIX}{raw_hash}>>");
             stripped_eml.splice(raw_start..raw_end, placeholder.as_bytes().iter().cloned());
             Some(raw_hash)
         } else {
@@ -833,7 +850,7 @@ fn schedule_placeholder(
     hash: &str,
     alt: Option<&str>,
 ) -> usize {
-    let placeholder_str = format!("<<BICHON_DETACH_HASH:{}>>", hash);
+    let placeholder_str = format!("{DETACH_PLACEHOLDER_PREFIX}{hash}>>");
     let pattern = placeholder_str.as_bytes();
     let pattern_len = pattern.len();
 
