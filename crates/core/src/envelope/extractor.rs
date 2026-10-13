@@ -23,7 +23,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    account::migration::AccountModel,
+    account::migration::{AccountModel, ExtractionRules},
     archive::imap::mailbox::MailBox,
     backup::gate::{BACKUP_ACQUIRE_TIMEOUT, WRITE_GATE},
     common::AddrVec,
@@ -475,35 +475,63 @@ pub fn extract_references(message: &Message<'_>) -> Option<Vec<String>> {
     }
 }
 
-pub async fn detach_and_store_attachments(
+/// Decoded contents of an attachment selected for text extraction, collected
+/// while detaching so the extraction can run in one background batch.
+pub struct TextCandidate {
+    pub content_hash: String,
+    pub file_type: String,
+    pub ext: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Context deciding which detached attachments are queued for text
+/// extraction. Supplied by the live ingest path; offline tools pass `None`
+/// to [`strip_attachment_bodies`] and skip extraction entirely.
+pub struct ExtractionFilter<'a> {
+    /// Per-account rules; `None` means no rules are configured and the
+    /// default is to extract every supported type.
+    pub rules: Option<&'a ExtractionRules>,
+    pub mailbox_name: Option<&'a str>,
+    pub sender: Option<&'a str>,
+}
+
+/// Output of [`strip_attachment_bodies`].
+pub struct DetachedBody {
+    /// The EML with every valid attachment body replaced by a
+    /// `<<BICHON_DETACH_HASH:...>>` placeholder.
+    pub stripped_eml: Vec<u8>,
+    /// `(storage key, raw encoded MIME body)` pairs to persist in the blob
+    /// store. Invalid attachment ranges contribute a shared empty record in
+    /// the raw key domain.
+    pub blobs: Vec<(String, Bytes)>,
+    /// Attachment metadata, in descending raw-offset order.
+    pub infos: Vec<AttachmentInfo>,
+    /// Attachments selected for text extraction (empty unless an
+    /// [`ExtractionFilter`] was supplied).
+    pub text_candidates: Vec<TextCandidate>,
+}
+
+/// Strips attachment bodies out of a raw message and computes everything the
+/// storage layer needs to persist and later reconstruct it: the stripped EML
+/// with hash placeholders, the raw blob records, attachment metadata, and
+/// text-extraction candidates.
+///
+/// This is the single canonical implementation shared by the live ingest path
+/// ([`detach_and_store_attachments`]) and the offline store migration; the
+/// two must never diverge, or a migrated store stops matching what the
+/// runtime writes and reads back.
+pub fn strip_attachment_bodies(
     original_body: &[u8],
     message: &Message<'_>,
-    eml_content_hash: &str,
-    account_id: u64,
-    mailbox_id: u64,
-) -> Vec<AttachmentInfo> {
-    let rules = if account_id > 0 {
-        AccountModel::get(account_id)
-            .ok()
-            .and_then(|a| a.extraction_rules)
-    } else {
-        None
-    };
-
-    let mailbox_name = match rules.as_ref().map(|r| !r.folders.is_empty()) {
-        Some(true) => MailBox::get(mailbox_id).ok().map(|mb| mb.name),
-        _ => None,
-    };
-
-    let sender = message
-        .from()
-        .and_then(|addr| AddrVec::from(addr).0.into_iter().next())
-        .and_then(|add| add.address);
-
+    filter: Option<&ExtractionFilter<'_>>,
+) -> DetachedBody {
     let mut stripped_eml = original_body.to_vec();
-    let mut attachment_infos = Vec::new();
-    // Step 1: Collect and sort attachment ranges in reverse to maintain offset
-    // integrity
+    let mut infos = Vec::new();
+    let mut blobs = Vec::with_capacity(message.attachment_count());
+    let mut text_candidates = Vec::new();
+
+    // Collect and sort attachment ranges in reverse to maintain offset
+    // integrity while splicing placeholders.
     let mut ranges: Vec<_> = message
         .attachments()
         .map(|att| {
@@ -514,18 +542,7 @@ pub async fn detach_and_store_attachments(
             )
         })
         .collect();
-
     ranges.sort_by(|a, b| b.0.cmp(&a.0));
-    let mut attachments = Vec::with_capacity(ranges.len());
-
-    // Collect candidates for text extraction (non-inline, known document types).
-    struct TextCandidate {
-        content_hash: String,
-        file_type: String,
-        ext: String,
-        bytes: Vec<u8>,
-    }
-    let mut text_candidates: Vec<TextCandidate> = Vec::new();
 
     for (raw_start, raw_end, att) in ranges {
         // mail-parser may report attachment offsets past the body end for
@@ -543,7 +560,7 @@ pub async fn detach_and_store_attachments(
             let raw_bytes = &original_body[raw_start..raw_end];
             // Different transfer encodings of one file must not share a raw blob.
             let raw_hash = crate::utils::compute_raw_attachment_hash(raw_bytes);
-            attachments.push((raw_hash.clone(), Bytes::copy_from_slice(raw_bytes)));
+            blobs.push((raw_hash.clone(), Bytes::copy_from_slice(raw_bytes)));
 
             // Replace raw attachment content with a hash-based placeholder
             let placeholder = format!("<<BICHON_DETACH_HASH:{}>>", &raw_hash);
@@ -553,7 +570,7 @@ pub async fn detach_and_store_attachments(
             // No replacement is needed, but keep the empty storage record in
             // the raw key domain so it cannot shadow a decoded or email blob.
             let raw_hash = crate::utils::compute_raw_attachment_hash(b"");
-            attachments.push((raw_hash.clone(), Bytes::new()));
+            blobs.push((raw_hash.clone(), Bytes::new()));
             Some(raw_hash)
         };
 
@@ -583,19 +600,21 @@ pub async fn detach_and_store_attachments(
             })
             .unwrap_or_default();
 
-        let should_extract = rules.as_ref().map_or(true, |r| {
-            r.should_extract(
-                &ext,
-                mailbox_name.as_deref(),
-                att_name.as_deref(),
-                sender.as_deref(),
-            )
-        });
+        // Collect candidates for text extraction (non-inline, known document
+        // types allowed by the filter).
+        if let Some(filter) = filter {
+            let should_extract = filter.rules.map_or(true, |r| {
+                r.should_extract(
+                    &ext,
+                    filter.mailbox_name,
+                    att_name.as_deref(),
+                    filter.sender,
+                )
+            });
 
-        if !inline || !has_cid {
-            let decoded_len = att.contents().len();
-            if should_extract
-                && decoded_len <= crate::ext::text_extractor::max_extract_bytes()
+            if (!inline || !has_cid)
+                && should_extract
+                && att.contents().len() <= crate::ext::text_extractor::max_extract_bytes()
                 && crate::ext::text_extractor::should_try_extract(&file_type, &ext)
             {
                 text_candidates.push(TextCandidate {
@@ -607,24 +626,64 @@ pub async fn detach_and_store_attachments(
             }
         }
 
-        let info = AttachmentInfo {
+        infos.push(AttachmentInfo {
             filename: att.attachment_name().map(|n| n.to_string()),
             size: att.contents().len(),
             inline,
             file_type,
             content_id: att.content_id().map(|id| id.to_string()),
-            content_hash: content_hash.clone(),
+            content_hash,
             raw_content_hash,
             is_message: att.is_message(),
             extracted_text: None,
             extracted_page_count: None,
             extracted_is_ocr: false,
-        };
-
-        attachment_infos.push(info);
+        });
     }
 
+    DetachedBody {
+        stripped_eml,
+        blobs,
+        infos,
+        text_candidates,
+    }
+}
+
+pub async fn detach_and_store_attachments(
+    original_body: &[u8],
+    message: &Message<'_>,
+    eml_content_hash: &str,
+    account_id: u64,
+    mailbox_id: u64,
+) -> Vec<AttachmentInfo> {
+    let rules = if account_id > 0 {
+        AccountModel::get(account_id)
+            .ok()
+            .and_then(|a| a.extraction_rules)
+    } else {
+        None
+    };
+
+    let mailbox_name = match rules.as_ref().map(|r| !r.folders.is_empty()) {
+        Some(true) => MailBox::get(mailbox_id).ok().map(|mb| mb.name),
+        _ => None,
+    };
+
+    let sender = message
+        .from()
+        .and_then(|addr| AddrVec::from(addr).0.into_iter().next())
+        .and_then(|add| add.address);
+
+    let filter = ExtractionFilter {
+        rules: rules.as_ref(),
+        mailbox_name: mailbox_name.as_deref(),
+        sender: sender.as_deref(),
+    };
+    let detached = strip_attachment_bodies(original_body, message, Some(&filter));
+    let mut attachment_infos = detached.infos;
+
     // Run text extraction in a single spawn_blocking batch.
+    let text_candidates = detached.text_candidates;
     if !text_candidates.is_empty() {
         if let Ok(mut extracted_map) = tokio::task::spawn_blocking(move || {
             let mut map: std::collections::HashMap<String, (String, Option<u32>, bool)> =
@@ -652,8 +711,11 @@ pub async fn detach_and_store_attachments(
     // Step 4: Store the final stripped EML content
     BLOB_MANAGER
         .queue(DetachedEmail {
-            email: (eml_content_hash.to_string(), Bytes::from(stripped_eml)),
-            attachments: Some(attachments),
+            email: (
+                eml_content_hash.to_string(),
+                Bytes::from(detached.stripped_eml),
+            ),
+            attachments: Some(detached.blobs),
         })
         .await;
 
