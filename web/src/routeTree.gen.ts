@@ -34,6 +34,9 @@ const AuthenticatedLegalHoldLazyImport = createFileRoute(
 const AuthenticatedIntegrityLazyImport = createFileRoute(
   '/_authenticated/integrity',
 )()
+const AuthenticatedConfigurationLazyImport = createFileRoute(
+  '/_authenticated/configuration',
+)()
 const AuthenticatedComplianceExportLazyImport = createFileRoute(
   '/_authenticated/compliance-export',
 )()
@@ -98,9 +101,6 @@ const AuthenticatedSettingsLicenseLazyImport = createFileRoute(
 )()
 const AuthenticatedSettingsConfigurationsLazyImport = createFileRoute(
   '/_authenticated/settings/configurations',
-)()
-const AuthenticatedSettingsComplianceLazyImport = createFileRoute(
-  '/_authenticated/settings/compliance',
 )()
 const AuthenticatedSettingsBrandingLazyImport = createFileRoute(
   '/_authenticated/settings/branding',
@@ -170,6 +170,15 @@ const AuthenticatedIntegrityLazyRoute = AuthenticatedIntegrityLazyImport.update(
 ).lazy(() =>
   import('./routes/_authenticated/integrity.lazy').then((d) => d.Route),
 )
+
+const AuthenticatedConfigurationLazyRoute =
+  AuthenticatedConfigurationLazyImport.update({
+    id: '/configuration',
+    path: '/configuration',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any).lazy(() =>
+    import('./routes/_authenticated/configuration.lazy').then((d) => d.Route),
+  )
 
 const AuthenticatedComplianceExportLazyRoute =
   AuthenticatedComplianceExportLazyImport.update({
@@ -449,17 +458,6 @@ const AuthenticatedSettingsConfigurationsLazyRoute =
     ),
   )
 
-const AuthenticatedSettingsComplianceLazyRoute =
-  AuthenticatedSettingsComplianceLazyImport.update({
-    id: '/compliance',
-    path: '/compliance',
-    getParentRoute: () => AuthenticatedSettingsRouteLazyRoute,
-  } as any).lazy(() =>
-    import('./routes/_authenticated/settings/compliance.lazy').then(
-      (d) => d.Route,
-    ),
-  )
-
 const AuthenticatedSettingsBrandingLazyRoute =
   AuthenticatedSettingsBrandingLazyImport.update({
     id: '/branding',
@@ -653,6 +651,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedComplianceExportLazyImport
       parentRoute: typeof AuthenticatedRouteImport
     }
+    '/_authenticated/configuration': {
+      id: '/_authenticated/configuration'
+      path: '/configuration'
+      fullPath: '/configuration'
+      preLoaderRoute: typeof AuthenticatedConfigurationLazyImport
+      parentRoute: typeof AuthenticatedRouteImport
+    }
     '/_authenticated/integrity': {
       id: '/_authenticated/integrity'
       path: '/integrity'
@@ -728,13 +733,6 @@ declare module '@tanstack/react-router' {
       path: '/branding'
       fullPath: '/settings/branding'
       preLoaderRoute: typeof AuthenticatedSettingsBrandingLazyImport
-      parentRoute: typeof AuthenticatedSettingsRouteLazyImport
-    }
-    '/_authenticated/settings/compliance': {
-      id: '/_authenticated/settings/compliance'
-      path: '/compliance'
-      fullPath: '/settings/compliance'
-      preLoaderRoute: typeof AuthenticatedSettingsComplianceLazyImport
       parentRoute: typeof AuthenticatedSettingsRouteLazyImport
     }
     '/_authenticated/settings/configurations': {
@@ -882,7 +880,6 @@ interface AuthenticatedSettingsRouteLazyRouteChildren {
   AuthenticatedSettingsAppearanceLazyRoute: typeof AuthenticatedSettingsAppearanceLazyRoute
   AuthenticatedSettingsApprovalsLazyRoute: typeof AuthenticatedSettingsApprovalsLazyRoute
   AuthenticatedSettingsBrandingLazyRoute: typeof AuthenticatedSettingsBrandingLazyRoute
-  AuthenticatedSettingsComplianceLazyRoute: typeof AuthenticatedSettingsComplianceLazyRoute
   AuthenticatedSettingsConfigurationsLazyRoute: typeof AuthenticatedSettingsConfigurationsLazyRoute
   AuthenticatedSettingsLicenseLazyRoute: typeof AuthenticatedSettingsLicenseLazyRoute
   AuthenticatedSettingsMfaLazyRoute: typeof AuthenticatedSettingsMfaLazyRoute
@@ -905,8 +902,6 @@ const AuthenticatedSettingsRouteLazyRouteChildren: AuthenticatedSettingsRouteLaz
       AuthenticatedSettingsApprovalsLazyRoute,
     AuthenticatedSettingsBrandingLazyRoute:
       AuthenticatedSettingsBrandingLazyRoute,
-    AuthenticatedSettingsComplianceLazyRoute:
-      AuthenticatedSettingsComplianceLazyRoute,
     AuthenticatedSettingsConfigurationsLazyRoute:
       AuthenticatedSettingsConfigurationsLazyRoute,
     AuthenticatedSettingsLicenseLazyRoute:
@@ -950,6 +945,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedAuditLogLazyRoute: typeof AuthenticatedAuditLogLazyRoute
   AuthenticatedComplianceDashboardLazyRoute: typeof AuthenticatedComplianceDashboardLazyRoute
   AuthenticatedComplianceExportLazyRoute: typeof AuthenticatedComplianceExportLazyRoute
+  AuthenticatedConfigurationLazyRoute: typeof AuthenticatedConfigurationLazyRoute
   AuthenticatedIntegrityLazyRoute: typeof AuthenticatedIntegrityLazyRoute
   AuthenticatedLegalHoldLazyRoute: typeof AuthenticatedLegalHoldLazyRoute
   AuthenticatedTimestampAnchorLazyRoute: typeof AuthenticatedTimestampAnchorLazyRoute
@@ -978,6 +974,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
     AuthenticatedComplianceDashboardLazyRoute,
   AuthenticatedComplianceExportLazyRoute:
     AuthenticatedComplianceExportLazyRoute,
+  AuthenticatedConfigurationLazyRoute: AuthenticatedConfigurationLazyRoute,
   AuthenticatedIntegrityLazyRoute: AuthenticatedIntegrityLazyRoute,
   AuthenticatedLegalHoldLazyRoute: AuthenticatedLegalHoldLazyRoute,
   AuthenticatedTimestampAnchorLazyRoute: AuthenticatedTimestampAnchorLazyRoute,
@@ -1014,6 +1011,7 @@ export interface FileRoutesByFullPath {
   '/audit-log': typeof AuthenticatedAuditLogLazyRoute
   '/compliance-dashboard': typeof AuthenticatedComplianceDashboardLazyRoute
   '/compliance-export': typeof AuthenticatedComplianceExportLazyRoute
+  '/configuration': typeof AuthenticatedConfigurationLazyRoute
   '/integrity': typeof AuthenticatedIntegrityLazyRoute
   '/legal-hold': typeof AuthenticatedLegalHoldLazyRoute
   '/timestamp-anchor': typeof AuthenticatedTimestampAnchorLazyRoute
@@ -1025,7 +1023,6 @@ export interface FileRoutesByFullPath {
   '/settings/appearance': typeof AuthenticatedSettingsAppearanceLazyRoute
   '/settings/approvals': typeof AuthenticatedSettingsApprovalsLazyRoute
   '/settings/branding': typeof AuthenticatedSettingsBrandingLazyRoute
-  '/settings/compliance': typeof AuthenticatedSettingsComplianceLazyRoute
   '/settings/configurations': typeof AuthenticatedSettingsConfigurationsLazyRoute
   '/settings/license': typeof AuthenticatedSettingsLicenseLazyRoute
   '/settings/mfa': typeof AuthenticatedSettingsMfaLazyRoute
@@ -1059,6 +1056,7 @@ export interface FileRoutesByTo {
   '/audit-log': typeof AuthenticatedAuditLogLazyRoute
   '/compliance-dashboard': typeof AuthenticatedComplianceDashboardLazyRoute
   '/compliance-export': typeof AuthenticatedComplianceExportLazyRoute
+  '/configuration': typeof AuthenticatedConfigurationLazyRoute
   '/integrity': typeof AuthenticatedIntegrityLazyRoute
   '/legal-hold': typeof AuthenticatedLegalHoldLazyRoute
   '/timestamp-anchor': typeof AuthenticatedTimestampAnchorLazyRoute
@@ -1070,7 +1068,6 @@ export interface FileRoutesByTo {
   '/settings/appearance': typeof AuthenticatedSettingsAppearanceLazyRoute
   '/settings/approvals': typeof AuthenticatedSettingsApprovalsLazyRoute
   '/settings/branding': typeof AuthenticatedSettingsBrandingLazyRoute
-  '/settings/compliance': typeof AuthenticatedSettingsComplianceLazyRoute
   '/settings/configurations': typeof AuthenticatedSettingsConfigurationsLazyRoute
   '/settings/license': typeof AuthenticatedSettingsLicenseLazyRoute
   '/settings/mfa': typeof AuthenticatedSettingsMfaLazyRoute
@@ -1109,6 +1106,7 @@ export interface FileRoutesById {
   '/_authenticated/audit-log': typeof AuthenticatedAuditLogLazyRoute
   '/_authenticated/compliance-dashboard': typeof AuthenticatedComplianceDashboardLazyRoute
   '/_authenticated/compliance-export': typeof AuthenticatedComplianceExportLazyRoute
+  '/_authenticated/configuration': typeof AuthenticatedConfigurationLazyRoute
   '/_authenticated/integrity': typeof AuthenticatedIntegrityLazyRoute
   '/_authenticated/legal-hold': typeof AuthenticatedLegalHoldLazyRoute
   '/_authenticated/timestamp-anchor': typeof AuthenticatedTimestampAnchorLazyRoute
@@ -1120,7 +1118,6 @@ export interface FileRoutesById {
   '/_authenticated/settings/appearance': typeof AuthenticatedSettingsAppearanceLazyRoute
   '/_authenticated/settings/approvals': typeof AuthenticatedSettingsApprovalsLazyRoute
   '/_authenticated/settings/branding': typeof AuthenticatedSettingsBrandingLazyRoute
-  '/_authenticated/settings/compliance': typeof AuthenticatedSettingsComplianceLazyRoute
   '/_authenticated/settings/configurations': typeof AuthenticatedSettingsConfigurationsLazyRoute
   '/_authenticated/settings/license': typeof AuthenticatedSettingsLicenseLazyRoute
   '/_authenticated/settings/mfa': typeof AuthenticatedSettingsMfaLazyRoute
@@ -1159,6 +1156,7 @@ export interface FileRouteTypes {
     | '/audit-log'
     | '/compliance-dashboard'
     | '/compliance-export'
+    | '/configuration'
     | '/integrity'
     | '/legal-hold'
     | '/timestamp-anchor'
@@ -1170,7 +1168,6 @@ export interface FileRouteTypes {
     | '/settings/appearance'
     | '/settings/approvals'
     | '/settings/branding'
-    | '/settings/compliance'
     | '/settings/configurations'
     | '/settings/license'
     | '/settings/mfa'
@@ -1203,6 +1200,7 @@ export interface FileRouteTypes {
     | '/audit-log'
     | '/compliance-dashboard'
     | '/compliance-export'
+    | '/configuration'
     | '/integrity'
     | '/legal-hold'
     | '/timestamp-anchor'
@@ -1214,7 +1212,6 @@ export interface FileRouteTypes {
     | '/settings/appearance'
     | '/settings/approvals'
     | '/settings/branding'
-    | '/settings/compliance'
     | '/settings/configurations'
     | '/settings/license'
     | '/settings/mfa'
@@ -1251,6 +1248,7 @@ export interface FileRouteTypes {
     | '/_authenticated/audit-log'
     | '/_authenticated/compliance-dashboard'
     | '/_authenticated/compliance-export'
+    | '/_authenticated/configuration'
     | '/_authenticated/integrity'
     | '/_authenticated/legal-hold'
     | '/_authenticated/timestamp-anchor'
@@ -1262,7 +1260,6 @@ export interface FileRouteTypes {
     | '/_authenticated/settings/appearance'
     | '/_authenticated/settings/approvals'
     | '/_authenticated/settings/branding'
-    | '/_authenticated/settings/compliance'
     | '/_authenticated/settings/configurations'
     | '/_authenticated/settings/license'
     | '/_authenticated/settings/mfa'
@@ -1337,6 +1334,7 @@ export const routeTree = rootRoute
         "/_authenticated/audit-log",
         "/_authenticated/compliance-dashboard",
         "/_authenticated/compliance-export",
+        "/_authenticated/configuration",
         "/_authenticated/integrity",
         "/_authenticated/legal-hold",
         "/_authenticated/timestamp-anchor",
@@ -1369,7 +1367,6 @@ export const routeTree = rootRoute
         "/_authenticated/settings/appearance",
         "/_authenticated/settings/approvals",
         "/_authenticated/settings/branding",
-        "/_authenticated/settings/compliance",
         "/_authenticated/settings/configurations",
         "/_authenticated/settings/license",
         "/_authenticated/settings/mfa",
@@ -1423,6 +1420,10 @@ export const routeTree = rootRoute
       "filePath": "_authenticated/compliance-export.lazy.tsx",
       "parent": "/_authenticated"
     },
+    "/_authenticated/configuration": {
+      "filePath": "_authenticated/configuration.lazy.tsx",
+      "parent": "/_authenticated"
+    },
     "/_authenticated/integrity": {
       "filePath": "_authenticated/integrity.lazy.tsx",
       "parent": "/_authenticated"
@@ -1465,10 +1466,6 @@ export const routeTree = rootRoute
     },
     "/_authenticated/settings/branding": {
       "filePath": "_authenticated/settings/branding.lazy.tsx",
-      "parent": "/_authenticated/settings"
-    },
-    "/_authenticated/settings/compliance": {
-      "filePath": "_authenticated/settings/compliance.lazy.tsx",
       "parent": "/_authenticated/settings"
     },
     "/_authenticated/settings/configurations": {

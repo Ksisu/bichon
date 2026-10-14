@@ -29,11 +29,13 @@ import { Label } from '@/components/ui/label'
 import { useEdition } from '@/hooks/use-edition'
 import { useCurrentUser } from '@/hooks/use-current-user'
 import { useToast } from '@/hooks/use-toast'
+import { FixedHeader } from '@/components/layout/fixed-header'
+import { Main } from '@/components/layout/main'
 
 /** Pro/Enterprise compliance configuration. Each field is an override on top
  *  of the env/CLI default: leave it empty to keep the default, type a value
  *  to override, and clear it (empty again) to return to the default. */
-export function ComplianceSettings() {
+export default function ComplianceConfigPage() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const { isPro, isEnterprise } = useEdition()
@@ -87,20 +89,30 @@ export function ComplianceSettings() {
 
   if (!canManage) {
     return (
-      <div className='w-full p-6 text-muted-foreground'>
-        {t(
-          'settings.compliance.forbidden',
-          'Compliance configuration requires the Pro or Enterprise edition and the system:root permission.',
-        )}
-      </div>
+      <>
+        <FixedHeader />
+        <Main>
+          <div className='mx-auto w-full max-w-7xl px-4 py-16 text-center text-muted-foreground'>
+            {t(
+              'settings.compliance.forbidden',
+              'Compliance configuration requires the Pro or Enterprise edition and the system:root permission.',
+            )}
+          </div>
+        </Main>
+      </>
     )
   }
 
   if (loading) {
     return (
-      <div className='flex h-64 items-center justify-center'>
-        <Loader2 className='h-6 w-6 animate-spin' />
-      </div>
+      <>
+        <FixedHeader />
+        <Main>
+          <div className='flex h-64 items-center justify-center'>
+            <Loader2 className='h-6 w-6 animate-spin' />
+          </div>
+        </Main>
+      </>
     )
   }
 
@@ -164,62 +176,67 @@ export function ComplianceSettings() {
   )
 
   return (
-    <div className='w-full max-w-7xl space-y-6 px-4'>
-      <div className='space-y-2'>
-        <h2 className='text-xl font-bold'>
-          {t('settings.compliance.title', 'Compliance configuration')}
-        </h2>
-        <p className='text-sm text-muted-foreground'>
-          {t(
-            'settings.compliance.description',
-            'Retention windows and schedule intervals for the audit trail, integrity checks and timestamp anchoring. Empty fields keep the server defaults; type a value to override.',
-          )}
-        </p>
-      </div>
+    <>
+      <FixedHeader />
+      <Main>
+        <div className='mx-auto w-full max-w-7xl space-y-6 px-4'>
+          <div className='space-y-2'>
+            <h1 className='text-lg font-semibold'>
+              {t('settings.compliance.title', 'Compliance configuration')}
+            </h1>
+            <p className='text-xs text-muted-foreground'>
+              {t(
+                'settings.compliance.description',
+                'Retention windows and schedule intervals for the audit trail, integrity checks and timestamp anchoring. Empty fields keep the server defaults; type a value to override.',
+              )}
+            </p>
+          </div>
 
-      <div className='space-y-6 rounded-lg border p-6'>
-        <div className='grid gap-4 sm:grid-cols-2'>
-          {numField(
-            'compliance-audit-retention',
-            auditRetentionDays,
-            setAuditRetentionDays,
-            'auditRetentionDays',
-            current?.audit_retention_days?.toString() ?? '',
-            'auditRetentionDaysHint',
-          )}
-          {numField(
-            'compliance-integrity-schedule',
-            integrityScheduleHours,
-            setIntegrityScheduleHours,
-            'integrityScheduleHours',
-            current?.integrity_schedule_hours?.toString() ?? '',
-            'integrityScheduleHoursHint',
-          )}
-          {numField(
-            'compliance-integrity-retention',
-            integrityRetentionDays,
-            setIntegrityRetentionDays,
-            'integrityRetentionDays',
-            current?.integrity_retention_days?.toString() ?? '',
-            'integrityRetentionDaysHint',
-          )}
-          {numField(
-            'compliance-tsp-interval',
-            tspIntervalHours,
-            setTspIntervalHours,
-            'tspIntervalHours',
-            current?.tsp_interval_hours?.toString() ?? '',
-            'tspIntervalHoursHint',
-          )}
-        </div>
+          <div className='space-y-6 rounded-lg border p-6'>
+            <div className='grid gap-4 sm:grid-cols-2'>
+              {numField(
+                'compliance-audit-retention',
+                auditRetentionDays,
+                setAuditRetentionDays,
+                'auditRetentionDays',
+                current?.audit_retention_days?.toString() ?? '',
+                'auditRetentionDaysHint',
+              )}
+              {numField(
+                'compliance-integrity-schedule',
+                integrityScheduleHours,
+                setIntegrityScheduleHours,
+                'integrityScheduleHours',
+                current?.integrity_schedule_hours?.toString() ?? '',
+                'integrityScheduleHoursHint',
+              )}
+              {numField(
+                'compliance-integrity-retention',
+                integrityRetentionDays,
+                setIntegrityRetentionDays,
+                'integrityRetentionDays',
+                current?.integrity_retention_days?.toString() ?? '',
+                'integrityRetentionDaysHint',
+              )}
+              {numField(
+                'compliance-tsp-interval',
+                tspIntervalHours,
+                setTspIntervalHours,
+                'tspIntervalHours',
+                current?.tsp_interval_hours?.toString() ?? '',
+                'tspIntervalHoursHint',
+              )}
+            </div>
 
-        <div className='flex items-center justify-end'>
-          <Button type='button' onClick={handleSave} disabled={saving}>
-            {saving && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-            {t('settings.compliance.save', 'Save configuration')}
-          </Button>
+            <div className='flex items-center justify-end'>
+              <Button type='button' onClick={handleSave} disabled={saving}>
+                {saving && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+                {t('settings.compliance.save', 'Save configuration')}
+              </Button>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
+      </Main>
+    </>
   )
 }
