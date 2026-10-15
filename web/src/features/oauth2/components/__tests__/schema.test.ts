@@ -8,6 +8,7 @@ describe('OAuth2 Form Schema', () => {
 
   const validData = {
     client_id: 'my-client-id',
+    client_type: 'Confidential' as const,
     auth_url: 'https://accounts.example.com/o/oauth2/auth',
     token_url: 'https://oauth2.example.com/token',
     redirect_uri: 'https://myapp.example.com/oauth2/callback',

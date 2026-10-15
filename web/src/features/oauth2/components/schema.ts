@@ -28,6 +28,7 @@ export const getOAuth2Schema = (t: (key: string) => string) =>
         required_error: t('oauth2.clientIdIsRequired'),
       })
       .min(1, { message: t('oauth2.clientIdCannotBeEmpty') }),
+    client_type: z.enum(['Confidential', 'Public']),
     client_secret: z.string().optional(),
     auth_url: z
       .string({
