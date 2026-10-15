@@ -2120,7 +2120,8 @@
       },
       "description": {
         "language": "Vælg det sprog, der skal bruges i webbrugerfladen.",
-        "theme": "Vælg mellem lys eller mørk tilstand for brugerfladen."
+        "theme": "Vælg mellem lys eller mørk tilstand for brugerfladen.",
+        "use_system": "Skift automatisk mellem den lyse og mørke version af det valgte tema baseret på dine enhedsindstillinger."
       },
       "field": {
         "language": "Grænsefladesprog",
@@ -2492,7 +2493,8 @@
     "light": "Lys",
     "orange": "Orange",
     "rose": "Rosa",
-    "yellow": "Gul"
+    "yellow": "Gul",
+    "use_system": "Brug systemtema"
   },
   "time": {
     "absolute_range": "Absolut datointerval",

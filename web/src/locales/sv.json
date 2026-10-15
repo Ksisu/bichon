@@ -2120,7 +2120,8 @@
       },
       "description": {
         "language": "Välj språk för webbanvändargränssnittet.",
-        "theme": "Välj mellan ljust eller mörkt läge för gränssnittet."
+        "theme": "Välj mellan ljust eller mörkt läge för gränssnittet.",
+        "use_system": "Växla automatiskt mellan ljus och mörk version av det valda temat utifrån dina enhetsinställningar."
       },
       "field": {
         "language": "Gränssnittsspråk",
@@ -2492,7 +2493,8 @@
     "light": "Ljus",
     "orange": "Orange",
     "rose": "Rosa",
-    "yellow": "Gul"
+    "yellow": "Gul",
+    "use_system": "Använd systemtema"
   },
   "time": {
     "absolute_range": "Absolut datumintervall",

@@ -11,6 +11,9 @@ import {
 } from '@/components/ui/popover'
 
 import { cn } from '@/lib/utils'
+import { themeFamily, themeMode, themeWithMode } from '@/lib/theme'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 
 const themeColors: Record<Theme, string> = {
   'light': '#ffffff',
@@ -150,12 +153,36 @@ function ThemePreview({
   )
 }
 
+/** Light and dark variants of one family, split along the diagonal. */
+function SplitThemePreview({
+  light,
+  dark,
+}: {
+  light: ThemeOption
+  dark: ThemeOption
+}) {
+  return (
+    <div className='relative shrink-0'>
+      <ThemePreview background={light.background} primary={light.color} muted={light.muted} />
+      <div
+        className='absolute inset-0'
+        style={{ clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}
+      >
+        <ThemePreview background={dark.background} primary={dark.color} muted={dark.muted} />
+      </div>
+    </div>
+  )
+}
+
 function ThemeItem({
   item,
+  dark,
   active,
   onSelect,
 }: {
   item: ThemeOption
+  /** When set, `item` is the light variant and the preview shows both. */
+  dark?: ThemeOption
   active: boolean
   onSelect: (v: Theme) => void
 }) {
@@ -169,11 +196,15 @@ function ThemeItem({
         active ? 'bg-accent' : 'hover:bg-accent/50'
       )}
     >
-      <ThemePreview
-        background={item.background}
-        primary={item.color}
-        muted={item.muted}
-      />
+      {dark ? (
+        <SplitThemePreview light={item} dark={dark} />
+      ) : (
+        <ThemePreview
+          background={item.background}
+          primary={item.color}
+          muted={item.muted}
+        />
+      )}
 
       <span className='flex-1 text-left text-xs font-medium'>
         {t(item.labelKey)}
@@ -193,13 +224,13 @@ function ThemeColumn({
   icon,
   label,
   items,
-  currentTheme,
+  isActive,
   onSelect,
 }: {
   icon: React.ReactNode
   label: string
   items: readonly ThemeOption[]
-  currentTheme: Theme
+  isActive: (v: Theme) => boolean
   onSelect: (v: Theme) => void
 }) {
   return (
@@ -213,7 +244,7 @@ function ThemeColumn({
         <ThemeItem
           key={item.value}
           item={item}
-          active={currentTheme === item.value}
+          active={isActive(item.value as Theme)}
           onSelect={onSelect}
         />
       ))}
@@ -222,16 +253,19 @@ function ThemeColumn({
 }
 
 export function ThemeSwitch() {
-  const { theme, setTheme } = useTheme()
+  const { setTheme, followSystem, setFollowSystem, resolvedTheme } = useTheme()
   const { t } = useTranslation()
 
-  const isDark = theme.includes('dark')
+  const isDark = themeMode(resolvedTheme) === 'dark'
+
+  // Mark the applied variant (equals `theme` unless following the system).
+  const isActive = (v: Theme) => v === resolvedTheme
 
   useEffect(() => {
     document
       .querySelector("meta[name='theme-color']")
-      ?.setAttribute('content', themeColors[theme])
-  }, [theme])
+      ?.setAttribute('content', themeColors[resolvedTheme])
+  }, [resolvedTheme])
 
   return (
     <Popover>
@@ -250,25 +284,51 @@ export function ThemeSwitch() {
           {t('theme.appearance')}
         </p>
 
-        <div className='grid grid-cols-2 gap-3'>
-          <ThemeColumn
-            icon={<Sun className='size-3.5' />}
-            label={t('theme.light')}
-            items={LIGHT_THEMES}
-            currentTheme={theme}
-            onSelect={setTheme}
+        <div className='mb-3 flex items-center justify-between rounded-lg px-1'>
+          <Label htmlFor='theme-follow-system' className='text-xs font-medium'>
+            {t('theme.use_system')}
+          </Label>
+          <Switch
+            id='theme-follow-system'
+            checked={followSystem}
+            onCheckedChange={setFollowSystem}
           />
+        </div>
 
-          <div className='border-l border-border/40 pl-3'>
+        {followSystem ? (
+          // One item per family; picking it keeps the variant currently shown.
+          <div className='grid grid-cols-2 gap-x-3 gap-y-1'>
+            {LIGHT_THEMES.map((light, i) => (
+              <ThemeItem
+                key={light.value}
+                item={light}
+                dark={DARK_THEMES[i]}
+                active={themeFamily(light.value) === themeFamily(resolvedTheme)}
+                onSelect={(v) => setTheme(themeWithMode(v, themeMode(resolvedTheme)))}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className='grid grid-cols-2 gap-3'>
             <ThemeColumn
-              icon={<Moon className='size-3.5' />}
-              label={t('theme.dark')}
-              items={DARK_THEMES}
-              currentTheme={theme}
+              icon={<Sun className='size-3.5' />}
+              label={t('theme.light')}
+              items={LIGHT_THEMES}
+              isActive={isActive}
               onSelect={setTheme}
             />
+
+            <div className='border-l border-border/40 pl-3'>
+              <ThemeColumn
+                icon={<Moon className='size-3.5' />}
+                label={t('theme.dark')}
+                items={DARK_THEMES}
+                isActive={isActive}
+                onSelect={setTheme}
+              />
+            </div>
           </div>
-        </div>
+        )}
       </PopoverContent>
     </Popover>
   )

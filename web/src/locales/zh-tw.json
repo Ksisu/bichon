@@ -2120,7 +2120,8 @@
       },
       "description": {
         "language": "選擇網頁介面顯示的语言。",
-        "theme": "為介面選擇淺色或深色顯示模式。"
+        "theme": "為介面選擇淺色或深色顯示模式。",
+        "use_system": "根據裝置設定，自動在所選主題的淺色與深色版本之間切換。"
       },
       "field": {
         "language": "介面语言",
@@ -2492,7 +2493,8 @@
     "light": "淺色",
     "orange": "橙色",
     "rose": "玫瑰色",
-    "yellow": "黃色"
+    "yellow": "黃色",
+    "use_system": "使用系統主題"
   },
   "time": {
     "absolute_range": "絕對日期範圍",

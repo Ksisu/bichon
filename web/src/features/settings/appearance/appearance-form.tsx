@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { CaretSortIcon, CheckIcon } from '@radix-ui/react-icons'
@@ -24,6 +25,8 @@ import { update_user } from '@/api/users/api'
 import { toast } from '@/hooks/use-toast'
 import { AxiosError } from 'axios'
 import { Card } from '@/components/ui/card'
+import { Switch } from '@/components/ui/switch'
+import { themeFamily, themeMode, themeWithMode } from '@/lib/theme'
 
 const languages = [
     { value: 'ar', label: 'العربية' },
@@ -90,11 +93,25 @@ function ThemePreview({ background, primary, muted }: { background: string; prim
     )
 }
 
+type ThemeSwatch = { background: string; color: string; muted: string }
+
+/** Light and dark variants of one family, split along the diagonal. */
+function SplitThemePreview({ light, dark }: { light: ThemeSwatch; dark: ThemeSwatch }) {
+    return (
+        <div className='relative'>
+            <ThemePreview background={light.background} primary={light.color} muted={light.muted} />
+            <div className='absolute inset-0' style={{ clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}>
+                <ThemePreview background={dark.background} primary={dark.color} muted={dark.muted} />
+            </div>
+        </div>
+    )
+}
+
 export function AppearanceForm() {
     const { data: user } = useCurrentUser()
     const queryClient = useQueryClient()
     const { t, i18n } = useTranslation()
-    const { theme, setTheme } = useTheme()
+    const { theme, setTheme, followSystem, setFollowSystem, resolvedTheme } = useTheme()
 
     const form = useForm<AppearanceFormValues>({
         resolver: zodResolver(appearanceSchema(t)),
@@ -104,6 +121,11 @@ export function AppearanceForm() {
             language: i18n.language || 'en',
         },
     })
+
+    // The theme applies on pick, from here or the header; keep the field on it.
+    useEffect(() => {
+        form.setValue('theme', theme)
+    }, [theme, form])
 
     const mutation = useMutation({
         mutationFn: async (values: AppearanceFormValues) => {
@@ -124,7 +146,6 @@ export function AppearanceForm() {
 
     function onSubmit(data: AppearanceFormValues) {
         i18n.changeLanguage(data.language)
-        setTheme(data.theme as Theme)
         mutation.mutate(data)
     }
 
@@ -195,41 +216,70 @@ export function AppearanceForm() {
                     <FormField
                         control={form.control}
                         name='theme'
-                        render={({ field }) => (
+                        render={() => (
                             <FormItem className="space-y-4">
                                 <div>
                                     <FormLabel className="text-base">{t('settings.appearance.field.theme')}</FormLabel>
                                     <FormDescription>{t('settings.appearance.description.theme')}</FormDescription>
                                 </div>
+                                <div className='flex items-center justify-between gap-4 rounded-lg border p-4 max-w-xl'>
+                                    <div className='space-y-0.5'>
+                                        <label htmlFor='appearance-follow-system' className='text-sm font-medium'>
+                                            {t('theme.use_system')}
+                                        </label>
+                                        <p className='text-sm text-muted-foreground'>
+                                            {t('settings.appearance.description.use_system')}
+                                        </p>
+                                    </div>
+                                    <Switch
+                                        id='appearance-follow-system'
+                                        checked={followSystem}
+                                        onCheckedChange={setFollowSystem}
+                                    />
+                                </div>
                                 <RadioGroup
-                                    onValueChange={(v) => {
-                                        setTheme(v as Theme);
-                                        field.onChange(v)
-                                    }}
-                                    defaultValue={field.value}
                                     className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 pt-2'
                                 >
-                                    {[...LIGHT_THEMES, ...DARK_THEMES].map((item) => {
-                                        const selected = field.value === item.value
+                                    {(followSystem
+                                        // One card per family while following the system. Picking it keeps
+                                        // the variant currently shown, so turning the toggle off is seamless.
+                                        ? LIGHT_THEMES.map((light, i) => ({
+                                            value: themeWithMode(light.value, themeMode(resolvedTheme)),
+                                            labelKey: light.labelKey,
+                                            light: light as ThemeSwatch,
+                                            dark: DARK_THEMES[i] as ThemeSwatch | undefined,
+                                        }))
+                                        : [...LIGHT_THEMES, ...DARK_THEMES].map((item) => ({
+                                            value: item.value as Theme,
+                                            labelKey: item.labelKey,
+                                            light: item as ThemeSwatch,
+                                            dark: undefined,
+                                        }))
+                                    ).map((item) => {
+                                        // Same rule as the header's theme switch.
+                                        const selected = followSystem
+                                            ? themeFamily(item.value) === themeFamily(resolvedTheme)
+                                            : item.value === resolvedTheme
 
                                         return (
                                             <Card
-                                                key={item.value}
-                                                onClick={() => {
-                                                    setTheme(item.value as Theme)
-                                                    field.onChange(item.value)
-                                                }}
+                                                key={followSystem ? themeFamily(item.value) : item.value}
+                                                onClick={() => setTheme(item.value)}
                                                 className={cn(
                                                     "cursor-pointer overflow-hidden border-2 transition-all hover:shadow-md",
                                                     selected ? "border-primary shadow-md" : "border-muted opacity-80"
                                                 )}
                                             >
                                                 <div className="p-2">
-                                                    <ThemePreview
-                                                        background={item.background}
-                                                        primary={item.color}
-                                                        muted={item.muted}
-                                                    />
+                                                    {item.dark ? (
+                                                        <SplitThemePreview light={item.light} dark={item.dark} />
+                                                    ) : (
+                                                        <ThemePreview
+                                                            background={item.light.background}
+                                                            primary={item.light.color}
+                                                            muted={item.light.muted}
+                                                        />
+                                                    )}
 
                                                     <div className="mt-2 flex items-center justify-between">
                                                         <span className="text-[11px] font-medium uppercase truncate">

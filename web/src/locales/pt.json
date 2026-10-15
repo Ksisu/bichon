@@ -2120,7 +2120,8 @@
       },
       "description": {
         "language": "Selecione o idioma da interface web.",
-        "theme": "Escolha entre o modo claro ou escuro."
+        "theme": "Escolha entre o modo claro ou escuro.",
+        "use_system": "Alterna automaticamente entre a versão clara e escura do tema selecionado com base nas configurações do seu dispositivo."
       },
       "field": {
         "language": "Idioma da interface",
@@ -2492,7 +2493,8 @@
     "light": "Claro",
     "orange": "Laranja",
     "rose": "Rosa",
-    "yellow": "Amarelo"
+    "yellow": "Amarelo",
+    "use_system": "Usar tema do sistema"
   },
   "time": {
     "absolute_range": "Intervalo de datas absoluto",

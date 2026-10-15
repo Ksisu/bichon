@@ -2120,7 +2120,8 @@
       },
       "description": {
         "language": "Valitse Web-käyttöliittymässä käytettävä kieli.",
-        "theme": "Valitse käyttöliittymän vaalea tai tumma tila."
+        "theme": "Valitse käyttöliittymän vaalea tai tumma tila.",
+        "use_system": "Vaihda automaattisesti valitun teeman vaalean ja tumman version välillä laitteesi asetusten mukaan."
       },
       "field": {
         "language": "Käyttöliittymän kieli",
@@ -2492,7 +2493,8 @@
     "light": "Vaalea",
     "orange": "Oranssi",
     "rose": "Roosa",
-    "yellow": "Keltainen"
+    "yellow": "Keltainen",
+    "use_system": "Käytä järjestelmän teemaa"
   },
   "time": {
     "absolute_range": "Kiinteä päivämääräväli",

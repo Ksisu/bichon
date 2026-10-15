@@ -2120,7 +2120,8 @@
       },
       "description": {
         "language": "Wybierz język interfejsu webowego.",
-        "theme": "Wybierz tryb jasny lub ciemny."
+        "theme": "Wybierz tryb jasny lub ciemny.",
+        "use_system": "Automatycznie przełączaj między jasną a ciemną wersją wybranego motywu zgodnie z ustawieniami urządzenia."
       },
       "field": {
         "language": "Język interfejsu",
@@ -2492,7 +2493,8 @@
     "light": "Jasny",
     "orange": "Pomarańczowy",
     "rose": "Różany",
-    "yellow": "Żółty"
+    "yellow": "Żółty",
+    "use_system": "Użyj motywu systemowego"
   },
   "time": {
     "absolute_range": "Bezwzględny zakres dat",
