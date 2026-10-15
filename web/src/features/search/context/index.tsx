@@ -29,6 +29,7 @@ export type SearchDialogType =
   | 'edit-tags'
   | 'update-tags'
   | 'restore'
+  | 'repair'
   | 'delete-mailbox'
 
 export type { DateDisplayMode }
@@ -61,6 +62,11 @@ interface SearchContextType {
   handleTagToggle: (tag: string) => void
   editTagsOpen: boolean
   setEditTagsOpen: (open: boolean) => void
+  /// Kept out of `SearchDialogType` on purpose: that union is driven by
+  /// `useDialogState`, whose setter toggles, so the history drawer would
+  /// become mutually exclusive with the dialogs instead of layering over them.
+  repairHistoryOpen: boolean
+  setRepairHistoryOpen: (open: boolean) => void
   dateDisplay: DateDisplayMode
   setDateDisplay: (mode: DateDisplayMode) => void
 }

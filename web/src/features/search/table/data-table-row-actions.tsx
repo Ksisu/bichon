@@ -28,11 +28,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useTranslation } from 'react-i18next'
-import { Clock, MoreVertical, TagIcon, Trash2, Upload } from 'lucide-react'
+import { Clock, MoreVertical, TagIcon, Trash2, Upload, Wrench } from 'lucide-react'
 import { EmailEnvelope } from '@/api'
 import { useSearchContext } from '../context'
 import { OP_MESSAGE_DELETE } from '@/api/approvals/api'
 import { usePendingApprovals } from '@/features/approvals/use-pending-approvals'
+import { useCurrentUser } from '@/hooks/use-current-user'
 
 interface DataTableRowActionsProps {
   row: Row<EmailEnvelope>
@@ -41,6 +42,15 @@ interface DataTableRowActionsProps {
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { setOpen, setCurrentEnvelope, setSelected, setToDelete, setEditTagsOpen } = useSearchContext()
   const { t } = useTranslation()
+  const { require_any_permission } = useCurrentUser()
+
+  // Repair is non-destructive — it only re-fetches and re-attaches missing
+  // bytes, hash-verified before the write — so unlike deletion it does not go
+  // through the approval flow.
+  const canRepair = require_any_permission(
+    ['system:root', 'data:manage'],
+    row.original.account_id
+  )
 
   // A queued message deletion leaves the message in the list, so the row still
   // offers to delete it. Blocking only *this* message keeps unrelated cleanup
@@ -116,6 +126,25 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               <Upload size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
+          {canRepair && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className='text-xs'
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setCurrentEnvelope(row.original)
+                  setSelected(new Map())
+                  setOpen('repair')
+                }}
+              >
+                {t('repair_message.repairAction', 'Repair message')}
+                <DropdownMenuShortcut>
+                  <Wrench size={16} />
+                </DropdownMenuShortcut>
+              </DropdownMenuItem>
+            </>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             disabled={deleteQueued}

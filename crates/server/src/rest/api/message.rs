@@ -22,6 +22,7 @@ use crate::rest::ApiResult;
 use bichon_core::account::migration::AccountModel;
 use bichon_core::common::paginated::DataPage;
 use bichon_core::envelope::extractor::{repair_envelope_blobs, BlobRepairReport};
+use bichon_core::envelope::repair::BlobRepairRecord;
 use bichon_core::error::code::ErrorCode;
 use bichon_core::message::append::restore_emails;
 use bichon_core::message::append::RestoreMessagesRequest;
@@ -307,7 +308,47 @@ impl MessageApi {
         let account_id = account_id.0;
         AccountModel::check_account_exists(account_id)?;
         context.require_permission(Some(account_id), Permission::DATA_MANAGE)?;
-        Ok(Json(repair_envelope_blobs(account_id, &envelope_id.0).await?))
+        let report = repair_envelope_blobs(account_id, &envelope_id.0).await?;
+        // Best-effort: failing to record the attempt must not fail the repair,
+        // which has already succeeded by this point.
+        if let Err(e) = BlobRepairRecord::persist(context.user.id, &context.user.username, &report) {
+            tracing::warn!("failed to persist blob repair record: {:#?}", e);
+        }
+        Ok(Json(report))
+    }
+
+    /// Lists recent blob-repair reports, newest first.
+    ///
+    /// Scoped to the accounts the caller may repair: the filter is the same
+    /// `DATA_MANAGE` predicate [`Self::repair_message`] enforces, so a caller
+    /// sees exactly the reports for records they could have repaired
+    /// themselves.
+    #[oai(
+        path = "/repair-reports",
+        method = "get",
+        operation_id = "list_repair_reports"
+    )]
+    async fn list_repair_reports(
+        &self,
+        context: WrappedContext,
+        /// Maximum number of reports to return.
+        limit: Query<Option<usize>>,
+        /// Restrict the result to one account.
+        account_id: Query<Option<u64>>,
+    ) -> ApiResult<Json<Vec<BlobRepairRecord>>> {
+        let limit = limit.0.unwrap_or(50).min(BlobRepairRecord::HISTORY_LIMIT);
+        // Filter before truncating: taking the newest `limit` first and then
+        // filtering would hand a caller who may repair few accounts an
+        // arbitrarily short list — or an empty one.
+        let reports = BlobRepairRecord::list_recent(usize::MAX)
+            .into_iter()
+            .filter(|r| account_id.0.map_or(true, |id| id == r.account_id))
+            .filter(|r| {
+                context.has_permission(Some(r.account_id), Permission::DATA_MANAGE)
+            })
+            .take(limit)
+            .collect();
+        Ok(Json(reports))
     }
 
     /// Restore an email to an account's IMAP server.

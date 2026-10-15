@@ -33,6 +33,8 @@ import { MailBoxDeleteDialog } from './delete-mailbox-dialog'
 import { EditTagsDialog } from './edit-tag-dialog'
 import { MailDisplayDrawer } from './mail-display-dialog'
 import { MailListTable } from './mail-list-table'
+import { RepairHistoryDrawer } from '@/features/repair/repair-history-drawer'
+import { RepairMessageDialog } from '@/features/repair/repair-message-dialog'
 import { RestoreMessageDialog } from './restore-message-dialog'
 
 export default function EmailSearch() {
@@ -60,6 +62,7 @@ export default function EmailSearch() {
     number | undefined
   >(undefined)
   const [editTagsOpen, setEditTagsOpen] = React.useState(false)
+  const [repairHistoryOpen, setRepairHistoryOpen] = React.useState(false)
   const { dateDisplay, setDateDisplay: handleSetDateDisplay } = useDateDisplay()
 
   const {
@@ -120,6 +123,8 @@ export default function EmailSearch() {
             handleTagToggle,
             editTagsOpen,
             setEditTagsOpen,
+            repairHistoryOpen,
+            setRepairHistoryOpen,
             dateDisplay,
             setDateDisplay: handleSetDateDisplay,
           }}
@@ -190,6 +195,21 @@ export default function EmailSearch() {
             key='restore-mail-dialog'
             open={open === 'restore'}
             onOpenChange={() => setOpen('restore')}
+          />
+
+          <RepairMessageDialog
+            key='repair-mail-dialog'
+            open={open === 'repair'}
+            onOpenChange={() => setOpen('repair')}
+            accountId={selectedEnvelope?.account_id}
+            envelopeId={selectedEnvelope?.id}
+            subject={selectedEnvelope?.subject}
+          />
+
+          <RepairHistoryDrawer
+            key='repair-history-drawer'
+            open={repairHistoryOpen}
+            onOpenChange={setRepairHistoryOpen}
           />
 
           <MailBoxDeleteDialog
