@@ -18,7 +18,7 @@
 
 
 import { createContext, useContext, useEffect, useState } from 'react'
-import { ALL_THEMES, resolveTheme, Theme } from '@/lib/theme'
+import { ALL_THEMES, isTheme, resolveTheme, Theme } from '@/lib/theme'
 
 export type { Theme } from '@/lib/theme'
 
@@ -62,9 +62,11 @@ export function ThemeProvider({
   ...props
 }: ThemeProviderProps) {
   const followSystemKey = `${storageKey}-follow-system`
-  const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
-  )
+  const [theme, setTheme] = useState<Theme>(() => {
+    // Ignore stale or hand-edited values; they'd end up as a class on <html>.
+    const stored = localStorage.getItem(storageKey)
+    return isTheme(stored) ? stored : defaultTheme
+  })
   const [followSystem, setFollowSystemState] = useState<boolean>(
     () => localStorage.getItem(followSystemKey) === 'true'
   )

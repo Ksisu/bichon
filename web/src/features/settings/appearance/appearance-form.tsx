@@ -26,7 +26,16 @@ import { toast } from '@/hooks/use-toast'
 import { AxiosError } from 'axios'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
-import { themeFamily, themeMode, themeWithMode } from '@/lib/theme'
+import {
+    THEME_FAMILIES,
+    THEME_MODES,
+    type ThemeMode,
+    type ThemeSwatch,
+    isTheme,
+    themeFamily,
+    themeMode,
+} from '@/lib/theme'
+import { SplitThemePreview, ThemePreview } from '@/components/theme-preview'
 
 const languages = [
     { value: 'ar', label: 'العربية' },
@@ -49,29 +58,9 @@ const languages = [
     { value: 'zh-tw', label: '繁體中文' },
 ]
 
-const LIGHT_THEMES = [
-    { value: 'light', labelKey: 'theme.default', background: '#ffffff', color: '#0f172a', muted: '#cbd5e1' },
-    { value: 'rose-light', labelKey: 'theme.rose', background: '#fff1f2', color: '#e11d48', muted: '#fda4af' },
-    { value: 'orange-light', labelKey: 'theme.orange', background: '#fff7ed', color: '#ea580c', muted: '#fdba74' },
-    { value: 'green-light', labelKey: 'theme.green', background: '#f0fdf4', color: '#16a34a', muted: '#86efac' },
-    { value: 'yellow-light', labelKey: 'theme.yellow', background: '#fefce8', color: '#ca8a04', muted: '#fde047' },
-    { value: 'blue-light', labelKey: 'theme.blue', background: '#eff6ff', color: '#2563eb', muted: '#bfdbfe' },
-] as const
-
-const DARK_THEMES = [
-    { value: 'dark', labelKey: 'theme.default', background: '#020817', color: '#94a3b8', muted: '#334155' },
-    { value: 'rose-dark', labelKey: 'theme.rose', background: '#1f1115', color: '#e11d48', muted: '#881337' },
-    { value: 'orange-dark', labelKey: 'theme.orange', background: '#1c120d', color: '#f97316', muted: '#9a3412' },
-    { value: 'green-dark', labelKey: 'theme.green', background: '#0d1b12', color: '#22c55e', muted: '#166534' },
-    { value: 'yellow-dark', labelKey: 'theme.yellow', background: '#1c1608', color: '#facc15', muted: '#a16207' },
-    { value: 'blue-dark', labelKey: 'theme.blue', background: '#172554', color: '#60a5fa', muted: '#1e3a8a' }
-] as const
-
-const ALL_THEME_VALUES = [...LIGHT_THEMES.map(t => t.value), ...DARK_THEMES.map(t => t.value)] as [string, ...string[]]
-
 const appearanceSchema = (t: (key: string) => string) => z.object({
-    theme: z.enum(ALL_THEME_VALUES, {
-        required_error: t('settings.appearance.validation.theme.required'),
+    theme: z.custom<Theme>(isTheme, {
+        message: t('settings.appearance.validation.theme.required'),
     }),
     language: z.string({
         required_error: t('settings.appearance.validation.language.required'),
@@ -80,30 +69,36 @@ const appearanceSchema = (t: (key: string) => string) => z.object({
 
 type AppearanceFormValues = z.infer<ReturnType<typeof appearanceSchema>>
 
-function ThemePreview({ background, primary, muted }: { background: string; primary: string; muted: string }) {
-    return (
-        <div className='flex h-12 w-full flex-col gap-1.5 rounded-md border p-2 shadow-sm' style={{ backgroundColor: background, borderColor: 'transparent' }}>
-            <div className='flex gap-1'>
-                <span className='h-1.5 w-1.5 rounded-full' style={{ backgroundColor: muted }} />
-                <span className='h-1.5 w-1.5 rounded-full' style={{ backgroundColor: primary }} />
-            </div>
-            <div className='h-1.5 w-3/4 rounded-sm' style={{ backgroundColor: primary }} />
-            <div className='h-1.5 w-1/2 rounded-sm opacity-50' style={{ backgroundColor: muted }} />
-        </div>
-    )
+type ThemeCard = {
+    key: string
+    /** The theme applied when the card is picked. */
+    value: Theme
+    labelKey: string
+    swatch: ThemeSwatch
+    /** Set for family cards: `swatch` is the light variant, previewed beside this one. */
+    dark?: ThemeSwatch
 }
 
-type ThemeSwatch = { background: string; color: string; muted: string }
-
-/** Light and dark variants of one family, split along the diagonal. */
-function SplitThemePreview({ light, dark }: { light: ThemeSwatch; dark: ThemeSwatch }) {
-    return (
-        <div className='relative'>
-            <ThemePreview background={light.background} primary={light.color} muted={light.muted} />
-            <div className='absolute inset-0' style={{ clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}>
-                <ThemePreview background={dark.background} primary={dark.color} muted={dark.muted} />
-            </div>
-        </div>
+function themeCards(followSystem: boolean, shownMode: ThemeMode): ThemeCard[] {
+    if (followSystem) {
+        // One card per family while following the system. Picking it keeps
+        // the variant currently shown, so turning the toggle off is seamless.
+        return THEME_FAMILIES.map((family) => ({
+            key: family.id,
+            value: family[shownMode].value,
+            labelKey: family.labelKey,
+            swatch: family.light,
+            dark: family.dark,
+        }))
+    }
+    // Every light variant, then every dark one.
+    return THEME_MODES.flatMap((mode) =>
+        THEME_FAMILIES.map((family) => ({
+            key: family[mode].value,
+            value: family[mode].value,
+            labelKey: family.labelKey,
+            swatch: family[mode],
+        }))
     )
 }
 
@@ -117,7 +112,7 @@ export function AppearanceForm() {
         resolver: zodResolver(appearanceSchema(t)),
         mode: 'onChange',
         defaultValues: {
-            theme: (theme as any) || 'light',
+            theme: theme || 'light',
             language: i18n.language || 'en',
         },
     })
@@ -240,22 +235,7 @@ export function AppearanceForm() {
                                 <RadioGroup
                                     className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 pt-2'
                                 >
-                                    {(followSystem
-                                        // One card per family while following the system. Picking it keeps
-                                        // the variant currently shown, so turning the toggle off is seamless.
-                                        ? LIGHT_THEMES.map((light, i) => ({
-                                            value: themeWithMode(light.value, themeMode(resolvedTheme)),
-                                            labelKey: light.labelKey,
-                                            light: light as ThemeSwatch,
-                                            dark: DARK_THEMES[i] as ThemeSwatch | undefined,
-                                        }))
-                                        : [...LIGHT_THEMES, ...DARK_THEMES].map((item) => ({
-                                            value: item.value as Theme,
-                                            labelKey: item.labelKey,
-                                            light: item as ThemeSwatch,
-                                            dark: undefined,
-                                        }))
-                                    ).map((item) => {
+                                    {themeCards(followSystem, themeMode(resolvedTheme)).map((item) => {
                                         // Same rule as the header's theme switch.
                                         const selected = followSystem
                                             ? themeFamily(item.value) === themeFamily(resolvedTheme)
@@ -263,7 +243,7 @@ export function AppearanceForm() {
 
                                         return (
                                             <Card
-                                                key={followSystem ? themeFamily(item.value) : item.value}
+                                                key={item.key}
                                                 onClick={() => setTheme(item.value)}
                                                 className={cn(
                                                     "cursor-pointer overflow-hidden border-2 transition-all hover:shadow-md",
@@ -272,13 +252,9 @@ export function AppearanceForm() {
                                             >
                                                 <div className="p-2">
                                                     {item.dark ? (
-                                                        <SplitThemePreview light={item.light} dark={item.dark} />
+                                                        <SplitThemePreview light={item.swatch} dark={item.dark} size='lg' />
                                                     ) : (
-                                                        <ThemePreview
-                                                            background={item.light.background}
-                                                            primary={item.light.color}
-                                                            muted={item.light.muted}
-                                                        />
+                                                        <ThemePreview swatch={item.swatch} size='lg' />
                                                     )}
 
                                                     <div className="mt-2 flex items-center justify-between">

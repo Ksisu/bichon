@@ -66,6 +66,15 @@ describe('ThemeProvider stored theme', () => {
     expect(context().theme).toBe('rose-dark')
     expect(htmlClasses()).toEqual(['rose-dark'])
   })
+
+  it('ignores an unknown theme instead of applying it as a class', () => {
+    localStorage.setItem(THEME_KEY, 'purple-dark')
+    const { context } = renderProvider()
+
+    expect(context().theme).toBe('light')
+    expect(htmlClasses()).toEqual(['light'])
+    expect(localStorage.getItem(THEME_KEY)).toBe('light')
+  })
 })
 
 describe('ThemeProvider turning "use system theme" off', () => {
