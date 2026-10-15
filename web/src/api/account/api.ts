@@ -24,6 +24,8 @@ export interface MinimalAccount {
     id: number;
     email: string;
     name?: string;
+    /** IMAP authentication method; `null`/absent for accounts with no IMAP config (e.g. NoSync). */
+    auth_type?: AuthType | null;
 }
 
 export const minimal_account_list = async () => {

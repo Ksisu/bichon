@@ -18,7 +18,7 @@
 
 use std::str::FromStr;
 
-use crate::account::entity::ImapConfig;
+use crate::account::entity::{AuthType, ImapConfig};
 use crate::account::migration::{
     AccountModel, AccountType, ArchiveRules, ExtractionRules, QuotaWindow,
 };
@@ -330,6 +330,11 @@ pub struct MinimalAccount {
     pub id: u64,
     pub email: String,
     pub name: Option<String>,
+    /// The IMAP authentication method of the account, or `None` for accounts that have
+    /// no IMAP configuration at all (e.g. `NoSync`). `#[serde(default)]` keeps this
+    /// readable from a server that predates the field.
+    #[serde(default)]
+    pub auth_type: Option<AuthType>,
 }
 
 pub fn filter_accessible_accounts<'a>(
@@ -345,7 +350,8 @@ pub fn filter_accessible_accounts<'a>(
 
 #[cfg(test)]
 mod test {
-    use super::validate_cron_expression;
+    use super::{validate_cron_expression, MinimalAccount};
+    use crate::account::entity::AuthType;
 
     #[test]
     fn valid_cron_expressions() {
@@ -371,5 +377,31 @@ mod test {
     #[test]
     fn invalid_cron_expression_garbage() {
         assert!(validate_cron_expression("not a cron").is_err());
+    }
+
+    /// A `bichon-cli` built from this revision may talk to a server that predates
+    /// `auth_type`; the response must still parse.
+    #[test]
+    fn minimal_account_parses_without_auth_type() {
+        let account: MinimalAccount =
+            serde_json::from_str(r#"{"id":7,"email":"a@example.com","name":"a"}"#).unwrap();
+        assert_eq!(account.id, 7);
+        assert_eq!(account.email, "a@example.com");
+        assert_eq!(account.name.as_deref(), Some("a"));
+        assert_eq!(account.auth_type, None);
+    }
+
+    #[test]
+    fn minimal_account_parses_auth_type() {
+        let account: MinimalAccount = serde_json::from_str(
+            r#"{"id":7,"email":"a@example.com","name":null,"auth_type":"OAuth2"}"#,
+        )
+        .unwrap();
+        assert_eq!(account.auth_type, Some(AuthType::OAuth2));
+
+        // NoSync accounts carry no IMAP config, so the field is explicitly null.
+        let account: MinimalAccount =
+            serde_json::from_str(r#"{"id":8,"email":"b@example.com","auth_type":null}"#).unwrap();
+        assert_eq!(account.auth_type, None);
     }
 }
