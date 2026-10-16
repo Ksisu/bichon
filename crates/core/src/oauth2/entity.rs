@@ -154,12 +154,13 @@ impl OAuth2 {
         delete_impl::<OAuth2>(DB_MANAGER.db(), &id.to_string())
     }
 
-    pub fn update(id: u64, request: OAuth2UpdateRequest) -> BichonResult<()> {
+    /// Applies a partial update and returns the configuration as stored, so
+    /// callers can report the effective values (e.g. the client type) rather
+    /// than re-deriving them from the request.
+    pub fn update(id: u64, request: OAuth2UpdateRequest) -> BichonResult<OAuth2> {
         update_impl(DB_MANAGER.db(), &id.to_string(), |current| {
             apply_update(&current, request)
-        })?;
-
-        Ok(())
+        })
     }
 }
 
@@ -245,7 +246,7 @@ fn apply_update(old: &OAuth2, request: OAuth2UpdateRequest) -> BichonResult<OAut
     new.client_secret = resolve_client_secret(
         new.client_type,
         request.client_secret.as_deref(),
-        old.client_secret.as_ref(),
+        old.client_secret.as_deref(),
     )?;
     if request.description.is_some() {
         new.description = request.description;
@@ -283,17 +284,19 @@ fn apply_update(old: &OAuth2, request: OAuth2UpdateRequest) -> BichonResult<OAut
 fn resolve_client_secret(
     client_type: OAuth2ClientType,
     supplied: Option<&str>,
-    current: Option<&String>,
+    current: Option<&str>,
 ) -> BichonResult<Option<String>> {
     let supplied = supplied.filter(|secret| !secret.trim().is_empty());
     match (client_type, supplied) {
         (OAuth2ClientType::Confidential, Some(secret)) => Ok(Some(encrypt!(secret)?)),
-        (OAuth2ClientType::Confidential, None) => current.cloned().map(Some).ok_or_else(|| {
-            raise_error!(
-                "A client secret is required for confidential OAuth2 clients.".into(),
-                ErrorCode::InvalidParameter
-            )
-        }),
+        (OAuth2ClientType::Confidential, None) => {
+            current.map(ToOwned::to_owned).map(Some).ok_or_else(|| {
+                raise_error!(
+                    "A client secret is required for confidential OAuth2 clients.".into(),
+                    ErrorCode::InvalidParameter
+                )
+            })
+        }
         (OAuth2ClientType::Public, Some(_)) => Err(raise_error!(
             "Public OAuth2 clients must not include a client secret.".into(),
             ErrorCode::InvalidParameter
@@ -342,12 +345,12 @@ mod tests {
             .unwrap()
             .is_some_and(|secret| secret != "new"));
         assert_eq!(
-            resolve_client_secret(Confidential, Some(" "), Some(&stored)).unwrap(),
+            resolve_client_secret(Confidential, Some(" "), Some(stored.as_str())).unwrap(),
             Some(stored.clone())
         );
         assert!(resolve_client_secret(Confidential, None, None).is_err());
         assert_eq!(
-            resolve_client_secret(Public, None, Some(&stored)).unwrap(),
+            resolve_client_secret(Public, None, Some(stored.as_str())).unwrap(),
             None
         );
         assert!(resolve_client_secret(Public, Some("new"), None).is_err());

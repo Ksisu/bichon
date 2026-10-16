@@ -29,6 +29,8 @@ use std::net::IpAddr;
 use std::sync::{LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+use crate::oauth2::entity::OAuth2ClientType;
+
 /// Free-form JSON value carried by events that need a content snapshot
 /// (e.g. the subject / attachment names of a message being deleted, so the
 /// audit trail stays self-describing after the content is gone).
@@ -251,11 +253,16 @@ pub enum Event {
         user: String,
         oauth2_id: u64,
         name: String,
+        /// Type the configuration was created with. A public client holds no
+        /// secret, so nothing else in the record implies it.
+        client_type: OAuth2ClientType,
     },
     OAuth2ConfigUpdated {
         user: String,
         oauth2_id: u64,
         name: String,
+        /// Effective type after the update, not the requested one.
+        client_type: OAuth2ClientType,
     },
     OAuth2ConfigRemoved {
         user: String,

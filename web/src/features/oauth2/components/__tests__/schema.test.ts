@@ -27,6 +27,32 @@ describe('OAuth2 Form Schema', () => {
     })
   })
 
+  describe('client_type field', () => {
+    const firstMessage = (result: ReturnType<typeof schema.safeParse>) =>
+      result.success ? undefined : result.error.issues[0].message
+
+    it('accepts Confidential', () => {
+      const result = schema.safeParse(validData)
+      expect(result.success).toBe(true)
+    })
+
+    it('accepts Public', () => {
+      const result = schema.safeParse({ ...validData, client_type: 'Public' })
+      expect(result.success).toBe(true)
+    })
+
+    it('rejects a missing client_type', () => {
+      const result = schema.safeParse({ ...validData, client_type: undefined })
+      expect(result.success).toBe(false)
+      expect(firstMessage(result)).toBe('oauth2.clientTypeIsRequired')
+    })
+
+    it('rejects an unknown client type', () => {
+      const result = schema.safeParse({ ...validData, client_type: 'public' })
+      expect(result.success).toBe(false)
+    })
+  })
+
   describe('client_secret field', () => {
     it('accepts undefined client_secret', () => {
       const result = schema.safeParse(validData)
