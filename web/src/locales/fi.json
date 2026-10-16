@@ -2669,8 +2669,8 @@
     "light": "Vaalea",
     "orange": "Oranssi",
     "rose": "Roosa",
-    "yellow": "Keltainen",
-    "use_system": "Käytä järjestelmän teemaa"
+    "use_system": "Käytä järjestelmän teemaa",
+    "yellow": "Keltainen"
   },
   "time": {
     "absolute_range": "Kiinteä päivämääräväli",

@@ -2669,8 +2669,8 @@
     "light": "Ljus",
     "orange": "Orange",
     "rose": "Rosa",
-    "yellow": "Gul",
-    "use_system": "Använd systemtema"
+    "use_system": "Använd systemtema",
+    "yellow": "Gul"
   },
   "time": {
     "absolute_range": "Absolut datumintervall",

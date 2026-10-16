@@ -2669,8 +2669,8 @@
     "light": "Claro",
     "orange": "Laranja",
     "rose": "Rosa",
-    "yellow": "Amarelo",
-    "use_system": "Usar tema do sistema"
+    "use_system": "Usar tema do sistema",
+    "yellow": "Amarelo"
   },
   "time": {
     "absolute_range": "Intervalo de datas absoluto",

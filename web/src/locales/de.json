@@ -2669,8 +2669,8 @@
     "light": "Hell",
     "orange": "Orange",
     "rose": "Rosa",
-    "yellow": "Gelb",
-    "use_system": "Systemdesign verwenden"
+    "use_system": "Systemdesign verwenden",
+    "yellow": "Gelb"
   },
   "time": {
     "absolute_range": "Absoluter Datumsbereich",

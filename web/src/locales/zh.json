@@ -2669,8 +2669,8 @@
     "light": "浅色",
     "orange": "橙色",
     "rose": "玫瑰色",
-    "yellow": "黄色",
-    "use_system": "使用系统主题"
+    "use_system": "使用系统主题",
+    "yellow": "黄色"
   },
   "time": {
     "absolute_range": "绝对日期范围",

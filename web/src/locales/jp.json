@@ -2669,8 +2669,8 @@
     "light": "ライト",
     "orange": "オレンジ",
     "rose": "ローズ",
-    "yellow": "イエロー",
-    "use_system": "システムのテーマを使用"
+    "use_system": "システムのテーマを使用",
+    "yellow": "イエロー"
   },
   "time": {
     "absolute_range": "絶対日付範囲",

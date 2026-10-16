@@ -2669,8 +2669,8 @@
     "light": "Lys",
     "orange": "Oransje",
     "rose": "Rosa",
-    "yellow": "Gul",
-    "use_system": "Bruk systemtema"
+    "use_system": "Bruk systemtema",
+    "yellow": "Gul"
   },
   "time": {
     "absolute_range": "Absolutt datointervall",

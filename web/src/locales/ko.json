@@ -2669,8 +2669,8 @@
     "light": "라이트",
     "orange": "오렌지",
     "rose": "로즈",
-    "yellow": "옐로우",
-    "use_system": "시스템 테마 사용"
+    "use_system": "시스템 테마 사용",
+    "yellow": "옐로우"
   },
   "time": {
     "absolute_range": "절대 날짜 범위",

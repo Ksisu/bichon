@@ -2669,8 +2669,8 @@
     "light": "Jasny",
     "orange": "Pomarańczowy",
     "rose": "Różany",
-    "yellow": "Żółty",
-    "use_system": "Użyj motywu systemowego"
+    "use_system": "Użyj motywu systemowego",
+    "yellow": "Żółty"
   },
   "time": {
     "absolute_range": "Bezwzględny zakres dat",

@@ -84,8 +84,15 @@ export function ThemeProvider({
   const resolvedTheme = resolveTheme(theme, followSystem, prefersDark)
 
   const setFollowSystem = (follow: boolean) => {
-    // Turning it off keeps what's on screen: the shown variant becomes the choice.
-    if (!follow) setTheme(resolvedTheme)
+    if (follow) {
+      // Read the scheme now. The listener that keeps `prefersDark` fresh only
+      // runs while following, so a change made before the toggle was turned on
+      // would otherwise show the wrong variant for a frame.
+      setPrefersDark(systemPrefersDark())
+    } else {
+      // Turning it off keeps what's on screen: the shown variant becomes the choice.
+      setTheme(resolvedTheme)
+    }
     setFollowSystemState(follow)
   }
 
