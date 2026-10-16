@@ -2279,7 +2279,8 @@
       },
       "description": {
         "language": "Wählen Sie die Sprache für die Web-Oberfläche.",
-        "theme": "Wählen Sie zwischen hellem oder dunklem Modus."
+        "theme": "Wählen Sie zwischen hellem oder dunklem Modus.",
+        "use_system": "Wechselt anhand Ihrer Geräteeinstellungen automatisch zwischen der hellen und dunklen Variante des gewählten Designs."
       },
       "field": {
         "language": "Sprache der Benutzeroberfläche",
@@ -2668,7 +2669,8 @@
     "light": "Hell",
     "orange": "Orange",
     "rose": "Rosa",
-    "yellow": "Gelb"
+    "yellow": "Gelb",
+    "use_system": "Systemdesign verwenden"
   },
   "time": {
     "absolute_range": "Absoluter Datumsbereich",

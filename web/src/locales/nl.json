@@ -2279,7 +2279,8 @@
       },
       "description": {
         "language": "Selecteer de taal voor de webinterface.",
-        "theme": "Kies tussen de lichte of donkere modus voor de interface."
+        "theme": "Kies tussen de lichte of donkere modus voor de interface.",
+        "use_system": "Schakel automatisch tussen de lichte en donkere versie van het geselecteerde thema op basis van je apparaatinstellingen."
       },
       "field": {
         "language": "Interfacetaal",
@@ -2668,7 +2669,8 @@
     "light": "Licht",
     "orange": "Oranje",
     "rose": "Roze",
-    "yellow": "Geel"
+    "yellow": "Geel",
+    "use_system": "Systeemthema gebruiken"
   },
   "time": {
     "absolute_range": "Absolute datumbereik",

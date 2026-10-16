@@ -2279,7 +2279,8 @@
       },
       "description": {
         "language": "Select the language used in the Web UI.",
-        "theme": "Choose between light or dark mode for the interface."
+        "theme": "Choose between light or dark mode for the interface.",
+        "use_system": "Automatically switch between the light and dark version of the selected theme based on your device settings."
       },
       "field": {
         "language": "Language",
@@ -2668,7 +2669,8 @@
     "light": "Light",
     "orange": "Orange",
     "rose": "Rose",
-    "yellow": "Yellow"
+    "yellow": "Yellow",
+    "use_system": "Use system theme"
   },
   "time": {
     "absolute_range": "Absolute date range",
