@@ -279,7 +279,7 @@ mod tests {
     async fn partial_update_keeps_omitted_token_encrypted() {
         let oauth2 = OAuth2::new(OAuth2CreateRequest {
             client_id: "test-client".into(),
-            client_secret: "test-secret".into(),
+            client_secret: Some("test-secret".into()),
             auth_url: "https://example.com/auth".into(),
             token_url: "https://example.com/token".into(),
             redirect_uri: "http://localhost/callback".into(),

@@ -658,6 +658,10 @@ location /bichon/ {
 }
 ```
 
+### Can I use an OAuth app that has no client secret?
+
+Yes. Native/desktop apps (public clients) have no secret. Microsoft Entra apps on the "Mobile and desktop applications" platform are the common case. Set **Client type** to **Public/native client** in the OAuth2 configuration and leave the secret out. Bichon then relies on PKCE for the code exchange. The redirect URI must match the app registration exactly, e.g. `http://127.0.0.1:15630/oauth2/callback`.
+
 ### Can Bichon send emails?
 
 No. Bichon is an **archiver**, not an email client. The optional SMTP server **receives** emails only — it cannot send, forward, or reply.
