@@ -309,6 +309,24 @@ impl MessageApi {
         AccountModel::check_account_exists(account_id)?;
         context.require_permission(Some(account_id), Permission::DATA_MANAGE)?;
         let report = repair_envelope_blobs(account_id, &envelope_id.0).await?;
+        // Audited before the history record: `emit` is fire-and-forget, while
+        // the persist below can fail, and a repair that is missing from the
+        // history ring still belongs in the audit trail.
+        emit(Event::EmailRepaired {
+            email_id: report.envelope_id.clone(),
+            user: context.user.username.clone(),
+            ip: context.ip_addr,
+            account_id: report.account_id,
+            mailbox_id: report.mailbox_id,
+            subject: report.subject.clone(),
+            status: report.status.clone(),
+            email_missing_before: report.email_missing_before,
+            email_missing_after: report.email_missing_after,
+            missing_before: report.missing_before.len(),
+            missing_after: report.missing_after.len(),
+            skipped_due_to_backup: report.skipped_due_to_backup,
+            error: report.error.clone(),
+        });
         // Best-effort: failing to record the attempt must not fail the repair,
         // which has already succeeded by this point.
         if let Err(e) = BlobRepairRecord::persist(context.user.id, &context.user.username, &report) {

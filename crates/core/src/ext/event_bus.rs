@@ -93,6 +93,31 @@ pub enum Event {
         account_id: u64,
         subject: Option<String>,
     },
+    /// A blob repair re-fetched the message from IMAP and rewrote missing
+    /// email or attachment blobs in place, keeping the envelope id. Emitted
+    /// for every outcome the repair reports, `failed` included: an attempt
+    /// to rewrite archived content is worth recording even when the fetched
+    /// bytes did not match and nothing was written.
+    EmailRepaired {
+        email_id: String,
+        user: String,
+        /// Absent when the request carried no peer address.
+        ip: Option<IpAddr>,
+        account_id: u64,
+        mailbox_id: u64,
+        subject: String,
+        /// `complete` (nothing was missing), `repaired`, `partial` or `failed`.
+        status: String,
+        email_missing_before: bool,
+        email_missing_after: bool,
+        /// How many attachment blobs were suspected missing before / after.
+        missing_before: usize,
+        missing_after: usize,
+        /// Set when the fetched content validated but the write was skipped
+        /// because a backup window was open.
+        skipped_due_to_backup: bool,
+        error: Option<String>,
+    },
     /// Facet tags added/removed on emails.
     EmailTagged {
         user: String,

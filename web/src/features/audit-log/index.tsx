@@ -45,6 +45,7 @@ const EVENT_TYPES = [
   'email.deleted',
   'email.exported',
   'email.restored',
+  'email.repaired',
   'email.tagged',
   'attachment.downloaded',
   'attachment.previewed',
@@ -101,6 +102,7 @@ function eventTypeLabel(t: (key: string, defaultValue: string) => string, et: st
     'email.deleted': t('audit.eventTypes.emailDeleted', 'Email deleted'),
     'email.exported': t('audit.eventTypes.emailExported', 'Email exported'),
     'email.restored': t('audit.eventTypes.emailRestored', 'Email restored'),
+    'email.repaired': t('audit.eventTypes.emailRepaired', 'Email repaired'),
     'email.tagged': t('audit.eventTypes.emailTagged', 'Email tags changed'),
     'attachment.downloaded': t('audit.eventTypes.attachmentDownloaded', 'Attachment downloaded'),
     'attachment.previewed': t('audit.eventTypes.attachmentPreviewed', 'Attachment previewed'),
@@ -208,6 +210,12 @@ function describeEvent(rec: AuditRecord): string {
     case 'email.exported':
     case 'email.restored':
       return typeof p.subject === 'string' ? p.subject : rec.email_id ?? ''
+    case 'email.repaired': {
+      // The outcome belongs in the detail, not just the label: a `failed`
+      // repair rewrote nothing and must not read like a successful one.
+      const subject = typeof p.subject === 'string' ? p.subject : rec.email_id ?? ''
+      return typeof p.status === 'string' ? `${subject} · ${p.status}` : subject
+    }
     case 'email.tagged':
       return typeof p.count === 'number' ? `${p.count} email(s)` : ''
     case 'attachment.downloaded':
