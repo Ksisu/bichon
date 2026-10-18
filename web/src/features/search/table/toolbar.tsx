@@ -81,7 +81,7 @@ export function DataTableToolbar<TData>({
             <Button
               variant='outline'
               size='sm'
-              className='h-8 gap-1 px-2 text-xs'
+              className='h-6 gap-1 px-2 text-xs rounded-none'
               onClick={() => setRepairHistoryOpen(true)}
             >
               <History className='h-3.5 w-3.5' />

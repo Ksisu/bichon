@@ -31,6 +31,7 @@ import SearchProvider, { SearchDialogType } from './context'
 import { EnvelopeDeleteDialog } from './delete-dialog'
 import { MailBoxDeleteDialog } from './delete-mailbox-dialog'
 import { EditTagsDialog } from './edit-tag-dialog'
+import { GdprErasureDialog } from './gdpr-erasure-dialog'
 import { MailDisplayDrawer } from './mail-display-dialog'
 import { MailListTable } from './mail-list-table'
 import { RepairHistoryDrawer } from '@/features/repair/repair-history-drawer'
@@ -216,6 +217,12 @@ export default function EmailSearch() {
             key='mailbox-delete'
             open={open === 'delete-mailbox'}
             onOpenChange={() => setOpen('delete-mailbox')}
+          />
+
+          <GdprErasureDialog
+            key='gdpr-erasure'
+            open={open === 'gdpr-erasure'}
+            onOpenChange={() => setOpen('gdpr-erasure')}
           />
         </SearchProvider>
       </Main>

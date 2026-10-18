@@ -203,8 +203,13 @@ function formatTime(ts: number): string {
 function describeEvent(rec: AuditRecord): string {
   const p = rec.payload ?? {}
   switch (rec.event_type) {
-    case 'email.viewed':
-      return typeof p.subject === 'string' ? p.subject : rec.email_id ?? ''
+    case 'email.viewed': {
+      const subject = typeof p.subject === 'string' ? p.subject : rec.email_id ?? ''
+      // Name the delegation when there was one: "who read this" is only half
+      // the record, the other half is whether they were entitled to it. The
+      // full before/after scope is in the payload below.
+      return typeof p.via_view === 'string' ? `${subject} · via ${p.via_view}` : subject
+    }
     case 'email.deleted':
       return typeof p.subject === 'string' ? p.subject : rec.email_id ?? ''
     case 'email.exported':
@@ -234,8 +239,15 @@ function describeEvent(rec: AuditRecord): string {
     case 'role.updated':
     case 'role.removed':
       return typeof p.role === 'string' ? p.role : ''
+    case 'account.updated': {
+      const email = typeof p.email === 'string' ? p.email : ''
+      // Both sides of the scope are in the payload; the line only has to mark
+      // that a view's visibility moved, so it is not read as a rename.
+      return 'view_after' in p || 'view_before' in p
+        ? `${email} · view scope changed`
+        : email
+    }
     case 'account.created':
-    case 'account.updated':
     case 'account.removed':
       return typeof p.email === 'string' ? p.email : ''
     case 'account.download_started':

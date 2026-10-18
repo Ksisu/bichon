@@ -75,6 +75,11 @@ export function useSidebarData(): SidebarData {
             icon: Search,
           },
           {
+            title: t('navigation.attachment'),
+            url: '/attachment',
+            icon: Paperclip,
+          },
+          {
             title: t('navigation.analytics', 'Analytics'),
             url: '/analytics',
             icon: BarChart3,
@@ -104,11 +109,6 @@ export function useSidebarData(): SidebarData {
               'data:export:batch',
               'data:export:batch:all',
             ]),
-          },
-          {
-            title: t('navigation.attachment'),
-            url: '/attachment',
-            icon: Paperclip,
           },
         ],
       },

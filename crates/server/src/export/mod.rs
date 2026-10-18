@@ -24,6 +24,12 @@
 //! raw messages into an mbox artifact under the data-dir temp folder,
 //! writing a per-message manifest for later compliance workflows.
 //!
+//! The scope is a set of account ids, **not** the search scope groups: a batch
+//! export is also what the dual-control gate queues, and the approval record
+//! carries those ids — the filter a view would add cannot be stored there yet,
+//! so an export through a filtered view is refused rather than run against the
+//! whole source account. See `rest::api::export::export_scope`.
+//!
 //! Jobs live in an in-memory registry; artifacts on disk. A TTL sweep
 //! (`sweep_expired`) reclaims artifacts after `EXPORT_TTL_SECS`.
 

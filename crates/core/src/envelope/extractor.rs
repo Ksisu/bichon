@@ -81,9 +81,17 @@ pub async fn extract_envelope_and_store_it(
         }
     };
     let size = fetch.size.unwrap_or(body.len() as u32);
-    extract_envelope_core(body, uid, size, internal_date, account_id, mailbox_id)
-        .await
-        .map(|_| ())
+    extract_envelope_core(
+        body,
+        uid,
+        size,
+        internal_date,
+        account_id,
+        mailbox_id,
+        None,
+    )
+    .await
+    .map(|_| ())
 }
 
 pub async fn extract_envelope_from_eml(
@@ -92,7 +100,7 @@ pub async fn extract_envelope_from_eml(
     mailbox_id: u64,
 ) -> BichonResult<ExtractOutcome> {
     let _write_guard = WRITE_GATE.acquire(BACKUP_ACQUIRE_TIMEOUT).await?;
-    extract_envelope_core(body, 0, body.len() as u32, 0, account_id, mailbox_id).await
+    extract_envelope_core(body, 0, body.len() as u32, 0, account_id, mailbox_id, None).await
 }
 
 pub async fn extract_envelope_from_smtp(
@@ -108,10 +116,74 @@ pub async fn extract_envelope_from_smtp(
         utc_now!(),
         account_id,
         mailbox_id,
+        None,
     )
     .await
 }
 
+/// Archive a journal delivery: `inner` is the original message the journal
+/// report carried, `report` is the report exactly as the tenant delivered it.
+///
+/// The archived email is the **inner** message — that is the mail a user
+/// searches, opens and exports, and it is what the content hash, the Merkle
+/// leaf and the dedup cache refer to. The report is preserved beside it as a
+/// `message/rfc822` attachment, so the artifact the tenant actually sent stays
+/// retrievable byte for byte without polluting every envelope's headers with
+/// the report's outer From/To.
+///
+/// The journal wrapper is vendor-specific in its *body* but not in its
+/// structure: Exchange wraps the original in a `message/rfc822` part, Google's
+/// routing rule forwards it as a plain message. The caller decides which case
+/// applies; this function only assembles the result.
+pub async fn extract_envelope_from_journal(
+    inner: &[u8],
+    report: Option<&[u8]>,
+    account_id: u64,
+    mailbox_id: u64,
+) -> BichonResult<ExtractOutcome> {
+    let _write_guard = WRITE_GATE.acquire(BACKUP_ACQUIRE_TIMEOUT).await?;
+    // `size` describes the archived message (the inner one); the report is a
+    // separate attachment and has its own size.
+    extract_envelope_core(
+        inner,
+        0,
+        inner.len() as u32,
+        utc_now!(),
+        account_id,
+        mailbox_id,
+        report,
+    )
+    .await
+}
+
+/// If `raw` is a journal report that wraps the original message in a
+/// `message/rfc822` part, return the wrapped original.
+///
+/// **Standard MIME only.** Exchange puts the original in a `message/rfc822`
+/// part and wraps it in a vendor-specific report body; that body is where the
+/// *envelope* recipients (including BCC) live, and it is deliberately **not**
+/// inspected: its format differs between providers and versions, and a parser
+/// for it would be a liability. The consequence is documented rather than
+/// hidden — a BCC-only recipient is not visible in the original's headers, so
+/// per-recipient discovery cannot find them. Completeness of the journal itself
+/// is unaffected: the message is archived either way.
+///
+/// `None` means the delivery already *is* the original message — Google
+/// Workspace's routing rule forwards a plain copy rather than wrapping it.
+pub fn journal_delivery_inner(raw: &[u8]) -> Option<Vec<u8>> {
+    let message = MessageParser::default().parse(raw)?;
+    // Bound to a local so the iterator temporary is dropped before `message`
+    // is; the returned bytes are a copy.
+    let inner = message
+        .attachments()
+        .find(|att| att.is_message())
+        .map(|att| att.contents().to_vec());
+    inner
+}
+
+/// Archive one message. `journal_report` — present only on the journal path —
+/// is the report the message arrived in; it is stored as an attachment so the
+/// tenant-delivered artifact stays retrievable.
 async fn extract_envelope_core(
     body: &[u8],
     uid: u32,
@@ -119,6 +191,7 @@ async fn extract_envelope_core(
     internal_date: i64,
     account_id: u64,
     mailbox_id: u64,
+    journal_report: Option<&[u8]>,
 ) -> BichonResult<ExtractOutcome> {
     // The content hash of the original raw EML
     let email_content_hash = compute_content_hash(body);
@@ -257,9 +330,15 @@ async fn extract_envelope_core(
         .and_then(|add| add.address)
         .unwrap_or_else(|| "unknown".to_string());
     let attachment_count = message.attachment_count();
-    let attachments =
-        detach_and_store_attachments(body, &message, &email_content_hash, account_id, mailbox_id)
-            .await;
+    let attachments = detach_and_store_attachments(
+        body,
+        &message,
+        &email_content_hash,
+        account_id,
+        mailbox_id,
+        journal_report,
+    )
+    .await;
 
     let envelope_id = Uuid::new_v4().to_string();
     let now = utc_now!();
@@ -685,6 +764,7 @@ pub async fn detach_and_store_attachments(
     eml_content_hash: &str,
     account_id: u64,
     mailbox_id: u64,
+    journal_report: Option<&[u8]>,
 ) -> Vec<AttachmentInfo> {
     let rules = if account_id > 0 {
         AccountModel::get(account_id)
@@ -709,7 +789,29 @@ pub async fn detach_and_store_attachments(
         mailbox_name: mailbox_name.as_deref(),
         sender: sender.as_deref(),
     };
-    let detached = strip_attachment_bodies(original_body, message, Some(&filter));
+    let mut detached = strip_attachment_bodies(original_body, message, Some(&filter));
+
+    // A journal delivery keeps the tenant's report beside the message it
+    // carried. Stored as an ordinary attachment so it survives export, the
+    // integrity check and the reattach path with no special casing.
+    if let Some(report) = journal_report {
+        let hash = compute_content_hash(report);
+        detached.infos.push(AttachmentInfo {
+            file_type: "message/rfc822".to_string(),
+            inline: false,
+            filename: Some("journal-report.eml".to_string()),
+            size: report.len(),
+            content_id: None,
+            content_hash: hash.clone(),
+            raw_content_hash: None,
+            is_message: true,
+            extracted_text: None,
+            extracted_page_count: None,
+            extracted_is_ocr: false,
+        });
+        detached.blobs.push((hash, Bytes::from(report.to_vec())));
+    }
+
     let mut attachment_infos = detached.infos;
 
     // Run text extraction in a single spawn_blocking batch.
@@ -1014,7 +1116,8 @@ async fn persist_recovered_blob_if_allowed(
     let Ok(_write_guard) = gate.check() else {
         return false;
     };
-    detach_and_store_attachments(raw_body, message, fetched_hash, account_id, mailbox_id).await;
+    detach_and_store_attachments(raw_body, message, fetched_hash, account_id, mailbox_id, None)
+        .await;
     true
 }
 
@@ -1410,8 +1513,14 @@ mod test {
             let raw = b"From: test@example.com\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=empty.bin\r\n\r\n";
             let message = mail_parser::MessageParser::new().parse(raw).unwrap();
             let infos = super::detach_and_store_attachments(
-                raw, &message, &crate::utils::compute_content_hash(raw), 0, 0,
-            ).await;
+                raw,
+                &message,
+                &crate::utils::compute_content_hash(raw),
+                0,
+                0,
+                None,
+            )
+            .await;
             assert_ne!(infos[0].storage_hash(), infos[0].content_hash);
         });
     }
@@ -1421,6 +1530,51 @@ mod test {
     // test modules re-initialize against their own temp data dirs, so it only
     // passed when run in isolation. The reattach logic is covered by the
     // `reattach_parts` tests below with injected blob loads.
+
+    /// The journal wrapper is detected by MIME structure, not by a vendor
+    /// header: Exchange wraps the original in a `message/rfc822` part, Google's
+    /// routing rule forwards a plain message. Both must land in the archive
+    /// with the correct envelope, and a plain message must not be wrapped
+    /// around itself.
+    #[test]
+    fn journal_delivery_inner_unwraps_only_a_real_wrapper() {
+        let wrapped = b"From: MicrosoftExchange329e@example.com\r\n\
+To: journal@example.com\r\n\
+Subject: Journal report\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"b\"\r\n\
+\r\n\
+--b\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+Journal report body\r\n\
+--b\r\n\
+Content-Type: message/rfc822\r\n\
+\r\n\
+From: customer@example.org\r\n\
+To: employee@example.com\r\n\
+Subject: Inner subject\r\n\
+\r\n\
+Inner body\r\n\
+--b--\r\n";
+        let inner =
+            super::journal_delivery_inner(wrapped).expect("a wrapped report must be unwrapped");
+        let text = String::from_utf8_lossy(&inner);
+        assert!(
+            text.contains("Inner subject"),
+            "the inner message was not returned: {text}"
+        );
+        assert!(
+            !text.contains("Journal report body"),
+            "the vendor report body leaked into the archived message: {text}"
+        );
+
+        // A plain message is its own inner. Returning it as a wrapper would
+        // attach the message to itself and double its size.
+        let plain =
+            b"From: a@example.com\r\nTo: b@example.com\r\nSubject: plain\r\n\r\nbody\r\n";
+        assert!(super::journal_delivery_inner(plain).is_none());
+    }
 
     #[test]
     fn repeated_attachment_is_restored_once_per_placeholder() {
@@ -1980,7 +2134,7 @@ mod test {
 
         // Must not panic.
         let infos =
-            super::detach_and_store_attachments(truncated, &message, "test_content_hash", 0, 0)
+            super::detach_and_store_attachments(truncated, &message, "test_content_hash", 0, 0, None)
                 .await;
 
         // The attachment count must still match so the consistency check

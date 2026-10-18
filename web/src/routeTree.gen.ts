@@ -99,6 +99,9 @@ const AuthenticatedSettingsMfaLazyImport = createFileRoute(
 const AuthenticatedSettingsLicenseLazyImport = createFileRoute(
   '/_authenticated/settings/license',
 )()
+const AuthenticatedSettingsJournalLazyImport = createFileRoute(
+  '/_authenticated/settings/journal',
+)()
 const AuthenticatedSettingsConfigurationsLazyImport = createFileRoute(
   '/_authenticated/settings/configurations',
 )()
@@ -447,6 +450,17 @@ const AuthenticatedSettingsLicenseLazyRoute =
     ),
   )
 
+const AuthenticatedSettingsJournalLazyRoute =
+  AuthenticatedSettingsJournalLazyImport.update({
+    id: '/journal',
+    path: '/journal',
+    getParentRoute: () => AuthenticatedSettingsRouteLazyRoute,
+  } as any).lazy(() =>
+    import('./routes/_authenticated/settings/journal.lazy').then(
+      (d) => d.Route,
+    ),
+  )
+
 const AuthenticatedSettingsConfigurationsLazyRoute =
   AuthenticatedSettingsConfigurationsLazyImport.update({
     id: '/configurations',
@@ -742,6 +756,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsConfigurationsLazyImport
       parentRoute: typeof AuthenticatedSettingsRouteLazyImport
     }
+    '/_authenticated/settings/journal': {
+      id: '/_authenticated/settings/journal'
+      path: '/journal'
+      fullPath: '/settings/journal'
+      preLoaderRoute: typeof AuthenticatedSettingsJournalLazyImport
+      parentRoute: typeof AuthenticatedSettingsRouteLazyImport
+    }
     '/_authenticated/settings/license': {
       id: '/_authenticated/settings/license'
       path: '/license'
@@ -881,6 +902,7 @@ interface AuthenticatedSettingsRouteLazyRouteChildren {
   AuthenticatedSettingsApprovalsLazyRoute: typeof AuthenticatedSettingsApprovalsLazyRoute
   AuthenticatedSettingsBrandingLazyRoute: typeof AuthenticatedSettingsBrandingLazyRoute
   AuthenticatedSettingsConfigurationsLazyRoute: typeof AuthenticatedSettingsConfigurationsLazyRoute
+  AuthenticatedSettingsJournalLazyRoute: typeof AuthenticatedSettingsJournalLazyRoute
   AuthenticatedSettingsLicenseLazyRoute: typeof AuthenticatedSettingsLicenseLazyRoute
   AuthenticatedSettingsMfaLazyRoute: typeof AuthenticatedSettingsMfaLazyRoute
   AuthenticatedSettingsProfileLazyRoute: typeof AuthenticatedSettingsProfileLazyRoute
@@ -904,6 +926,8 @@ const AuthenticatedSettingsRouteLazyRouteChildren: AuthenticatedSettingsRouteLaz
       AuthenticatedSettingsBrandingLazyRoute,
     AuthenticatedSettingsConfigurationsLazyRoute:
       AuthenticatedSettingsConfigurationsLazyRoute,
+    AuthenticatedSettingsJournalLazyRoute:
+      AuthenticatedSettingsJournalLazyRoute,
     AuthenticatedSettingsLicenseLazyRoute:
       AuthenticatedSettingsLicenseLazyRoute,
     AuthenticatedSettingsMfaLazyRoute: AuthenticatedSettingsMfaLazyRoute,
@@ -1024,6 +1048,7 @@ export interface FileRoutesByFullPath {
   '/settings/approvals': typeof AuthenticatedSettingsApprovalsLazyRoute
   '/settings/branding': typeof AuthenticatedSettingsBrandingLazyRoute
   '/settings/configurations': typeof AuthenticatedSettingsConfigurationsLazyRoute
+  '/settings/journal': typeof AuthenticatedSettingsJournalLazyRoute
   '/settings/license': typeof AuthenticatedSettingsLicenseLazyRoute
   '/settings/mfa': typeof AuthenticatedSettingsMfaLazyRoute
   '/settings/profile': typeof AuthenticatedSettingsProfileLazyRoute
@@ -1069,6 +1094,7 @@ export interface FileRoutesByTo {
   '/settings/approvals': typeof AuthenticatedSettingsApprovalsLazyRoute
   '/settings/branding': typeof AuthenticatedSettingsBrandingLazyRoute
   '/settings/configurations': typeof AuthenticatedSettingsConfigurationsLazyRoute
+  '/settings/journal': typeof AuthenticatedSettingsJournalLazyRoute
   '/settings/license': typeof AuthenticatedSettingsLicenseLazyRoute
   '/settings/mfa': typeof AuthenticatedSettingsMfaLazyRoute
   '/settings/profile': typeof AuthenticatedSettingsProfileLazyRoute
@@ -1119,6 +1145,7 @@ export interface FileRoutesById {
   '/_authenticated/settings/approvals': typeof AuthenticatedSettingsApprovalsLazyRoute
   '/_authenticated/settings/branding': typeof AuthenticatedSettingsBrandingLazyRoute
   '/_authenticated/settings/configurations': typeof AuthenticatedSettingsConfigurationsLazyRoute
+  '/_authenticated/settings/journal': typeof AuthenticatedSettingsJournalLazyRoute
   '/_authenticated/settings/license': typeof AuthenticatedSettingsLicenseLazyRoute
   '/_authenticated/settings/mfa': typeof AuthenticatedSettingsMfaLazyRoute
   '/_authenticated/settings/profile': typeof AuthenticatedSettingsProfileLazyRoute
@@ -1169,6 +1196,7 @@ export interface FileRouteTypes {
     | '/settings/approvals'
     | '/settings/branding'
     | '/settings/configurations'
+    | '/settings/journal'
     | '/settings/license'
     | '/settings/mfa'
     | '/settings/profile'
@@ -1213,6 +1241,7 @@ export interface FileRouteTypes {
     | '/settings/approvals'
     | '/settings/branding'
     | '/settings/configurations'
+    | '/settings/journal'
     | '/settings/license'
     | '/settings/mfa'
     | '/settings/profile'
@@ -1261,6 +1290,7 @@ export interface FileRouteTypes {
     | '/_authenticated/settings/approvals'
     | '/_authenticated/settings/branding'
     | '/_authenticated/settings/configurations'
+    | '/_authenticated/settings/journal'
     | '/_authenticated/settings/license'
     | '/_authenticated/settings/mfa'
     | '/_authenticated/settings/profile'
@@ -1368,6 +1398,7 @@ export const routeTree = rootRoute
         "/_authenticated/settings/approvals",
         "/_authenticated/settings/branding",
         "/_authenticated/settings/configurations",
+        "/_authenticated/settings/journal",
         "/_authenticated/settings/license",
         "/_authenticated/settings/mfa",
         "/_authenticated/settings/profile",
@@ -1470,6 +1501,10 @@ export const routeTree = rootRoute
     },
     "/_authenticated/settings/configurations": {
       "filePath": "_authenticated/settings/configurations.lazy.tsx",
+      "parent": "/_authenticated/settings"
+    },
+    "/_authenticated/settings/journal": {
+      "filePath": "_authenticated/settings/journal.lazy.tsx",
       "parent": "/_authenticated/settings"
     },
     "/_authenticated/settings/license": {

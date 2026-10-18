@@ -31,6 +31,11 @@ export type SearchDialogType =
   | 'restore'
   | 'repair'
   | 'delete-mailbox'
+  /// The GDPR Art. 17 erasure request form. Its own dialog rather than a mode
+  /// of the delete dialog: the two ask for different things (a typed
+  /// confirmation versus a recorded assessment) and one of them leaves a
+  /// record a supervisory authority can read.
+  | 'gdpr-erasure'
 
 export type { DateDisplayMode }
 

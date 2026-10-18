@@ -273,6 +273,10 @@ impl From<AccountV3> for AccountModel {
             hold_placed_at: None,
             hold_released_by: None,
             hold_released_at: None,
+            // Migrated accounts are ordinary accounts; no special role and
+            // no view configuration.
+            kind: None,
+            view: None,
         }
     }
 }
