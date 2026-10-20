@@ -277,6 +277,10 @@ impl From<AccountV3> for AccountModel {
             // no view configuration.
             kind: None,
             view: None,
+            // Legacy accounts predate the stable-UID counter: leave both
+            // uninitialized, the reindex assigns UIDs and seeds the counter.
+            imap_uid_next: 0,
+            imap_uid_generation: 0,
         }
     }
 }

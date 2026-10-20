@@ -23,6 +23,10 @@ pub const F_MESSAGE_ID: &str = "message_id";
 pub const F_ACCOUNT_ID: &str = "account_id";
 pub const F_MAILBOX_ID: &str = "mailbox_id";
 pub const F_UID: &str = "uid";
+/// Stable archive-side IMAP UID, assigned once per envelope at ingest and
+/// never reused within a mailbox generation. Distinct from `uid` (the
+/// source server's UID).
+pub const F_IMAP_UID: &str = "imap_uid";
 pub const F_SUBJECT: &str = "subject";
 pub const F_BODY: &str = "body";
 pub const F_PREVIEW: &str = "preview";
@@ -82,6 +86,7 @@ pub struct EmailFields {
     pub f_account_id: Field,
     pub f_mailbox_id: Field,
     pub f_uid: Field,
+    pub f_imap_uid: Field,
     pub f_subject: Field,
     pub f_body: Field,
     pub f_preview: Field,

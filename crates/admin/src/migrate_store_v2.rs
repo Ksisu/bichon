@@ -1,4 +1,7 @@
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use bytes::Bytes;
 
@@ -15,6 +18,7 @@ use uuid::Uuid;
 use bichon_core::{
     common::AddrVec,
     envelope::extractor::{compute_thread_id, generate_message_id},
+    archive::imap::stable_uid::AccountUidAssigner,
     error::{code::ErrorCode, BichonResult},
     raise_error,
     store::envelope::Envelope,
@@ -102,6 +106,9 @@ pub struct NewIndexWriterV2 {
     pending: usize,
     email_buf: Vec<([u8; 32], Vec<u8>)>,
     attachment_buf: Vec<([u8; 32], Vec<u8>)>,
+    /// Per-account stable IMAP UID counter for the documents written here. The
+    /// legacy store had no such concept, so every document gets a fresh number.
+    uid_assigner: AccountUidAssigner,
 }
 
 impl NewIndexWriterV2 {
@@ -185,6 +192,7 @@ impl NewIndexWriterV2 {
             pending: 0,
             email_buf: Vec::new(),
             attachment_buf: Vec::new(),
+            uid_assigner: AccountUidAssigner::new(),
         })
     }
 
@@ -323,6 +331,9 @@ impl NewIndexWriterV2 {
             account_id,
             mailbox_id,
             uid,
+            // The legacy store predates stable UIDs: assign one from the
+            // per-account counter (write-once from here on).
+            imap_uid: self.uid_assigner.assign(account_id)?,
             subject,
             preview,
             from,
@@ -390,6 +401,17 @@ impl NewIndexWriterV2 {
         tracing::info!(count = self.pending, "committed tantivy batch");
         self.pending = 0;
         Ok(())
+    }
+
+    /// Persist the per-account stable UID counters this migration produced.
+    ///
+    /// Call it after [`Self::finish_writers`] (the index must be durable before
+    /// the counter claims the numbers in it) and before the engine shuts down.
+    /// `root` is the migration's `--bichon-root-dir`, whose `memdb/` the
+    /// metadata step already created.
+    pub fn finish_uids(&mut self, root: &Path) -> BichonResult<()> {
+        let db = bichon_core::admin::meta::open_database(root.join("memdb"))?;
+        self.uid_assigner.finish(&db)
     }
 
     /// Final commit + segment merge for Tantivy writers (called once at end).

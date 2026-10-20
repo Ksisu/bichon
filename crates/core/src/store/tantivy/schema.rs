@@ -27,8 +27,9 @@ use crate::store::tantivy::fields::{
     F_ATTACHMENT_CONTENT_HASH, F_ATTACHMENT_CONTENT_TYPE, F_ATTACHMENT_COUNT, F_ATTACHMENT_EXT,
     F_ATTACHMENT_NAME_EXACT, F_ATTACHMENT_NAME_TEXT, F_ATTACHMENT_NAME_TEXT_TRI, F_AUTO_TAGS,
     F_BCC, F_BCC_TEXT, F_BCC_TEXT_TRI, F_BODY, F_CC, F_CC_TEXT, F_CC_TEXT_TRI, F_CONTENT_HASH,
-    F_DATE, F_ENVELOPE_ID, F_FROM, F_FROM_TEXT, F_FROM_TEXT_TRI, F_HAS_TEXT, F_ID, F_INGEST_AT,
-    F_INTERNAL_DATE, F_IS_INDEXED, F_IS_MESSAGE, F_IS_OCR, F_MAILBOX_ID, F_MESSAGE_ID, F_NAME_EXACT,
+    F_DATE, F_ENVELOPE_ID, F_FROM, F_FROM_TEXT, F_FROM_TEXT_TRI, F_HAS_TEXT, F_ID, F_IMAP_UID,
+    F_INGEST_AT, F_INTERNAL_DATE, F_IS_INDEXED, F_IS_MESSAGE, F_IS_OCR, F_MAILBOX_ID, F_MESSAGE_ID,
+    F_NAME_EXACT,
     F_NAME_TEXT, F_NAME_TEXT_TRI, F_PAGE_COUNT, F_PREVIEW, F_REGULAR_ATTACHMENT_COUNT, F_SHARD_ID,
     F_SIZE, F_SUBJECT, F_SUBJECT_TRI, F_TAGS, F_TEXT, F_THREAD_ID, F_TO, F_TO_TEXT, F_TO_TEXT_TRI,
     F_UID,
@@ -99,6 +100,7 @@ impl EmailSchema {
         let f_account_id = b.add_u64_field(F_ACCOUNT_ID, INDEXED | STORED | FAST);
         let f_mailbox_id = b.add_u64_field(F_MAILBOX_ID, INDEXED | STORED | FAST);
         let f_uid = b.add_u64_field(F_UID, INDEXED | STORED | FAST);
+        let f_imap_uid = b.add_u64_field(F_IMAP_UID, INDEXED | STORED | FAST);
         let f_subject = b.add_text_field(F_SUBJECT, text_store("euro"));
         let f_body = b.add_text_field(F_BODY, text_no_store("euro"));
         let f_preview = b.add_text_field(F_PREVIEW, STORED);
@@ -145,6 +147,7 @@ impl EmailSchema {
             f_account_id,
             f_mailbox_id,
             f_uid,
+            f_imap_uid,
             f_subject,
             f_body,
             f_preview,

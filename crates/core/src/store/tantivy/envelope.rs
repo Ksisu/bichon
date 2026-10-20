@@ -1870,7 +1870,7 @@ impl IndexManager {
                                 None
                             }
                         }
-                    });
+                    }, None);
 
                     let delete_term = Term::from_field_text(f_id, eid);
                     operations.push(UserOperation::Delete(delete_term));
@@ -1889,6 +1889,143 @@ impl IndexManager {
             .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
 
         Ok(())
+    }
+
+    /// Assign a stable IMAP UID to every document of `account_id` that has none,
+    /// returning how many were assigned.
+    ///
+    /// This is a safety net, not a normal path: ingest assigns a UID to every
+    /// document it writes, and a rebuild carries or assigns one for every
+    /// document it re-creates. A document without one therefore means a restore
+    /// or a hand-written index, and the caller logs it loudly for that reason.
+    ///
+    /// Documents are processed per mailbox in `(ingest_at, uid)` order, which is
+    /// the order the downloader produced them in, so the enumeration order —
+    /// which is the `imap_uid` order — stays equal to the UID order.
+    ///
+    /// Blocking: it takes the writer lock and fsyncs the counter reservation, so
+    /// call it from a blocking context (`spawn_blocking`).
+    pub async fn assign_missing_uids(&self, account_id: u64) -> BichonResult<usize> {
+        let _write_guard = WRITE_GATE.acquire(BACKUP_ACQUIRE_TIMEOUT).await?;
+        let searcher = self.create_searcher()?;
+        let f = SchemaTools::email_fields();
+
+        // `imap_uid` is indexed, so the zero term is a real posting list rather
+        // than a scan over the account.
+        let query = BooleanQuery::new(vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(f.f_account_id, account_id),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(f.f_imap_uid, 0),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+        ]);
+
+        let total = searcher
+            .search(&query, &Count)
+            .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
+        if total == 0 {
+            return Ok(0);
+        }
+
+        // Relevance is irrelevant here — the hits are re-ordered below — but
+        // `TopDocs` needs an order to become a collector.
+        let hits = searcher
+            .search(&query, &TopDocs::with_limit(total).order_by_score())
+            .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
+
+        // Read the ordering key before touching the writer: the doc store is
+        // what the delete/add below has to round-trip, and sorting first keeps
+        // the assignment order deterministic.
+        let mut ordered: Vec<(u64, i64, u32, DocAddress)> = Vec::with_capacity(hits.len());
+        for (_, addr) in hits {
+            let doc: TantivyDocument = searcher
+                .doc(addr)
+                .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
+            let mailbox_id = doc
+                .get_first(f.f_mailbox_id)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let ingest_at = doc
+                .get_first(f.f_ingest_at)
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let source_uid = doc
+                .get_first(f.f_uid)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            ordered.push((mailbox_id, ingest_at, source_uid, addr));
+        }
+        ordered.sort_by_key(|(mailbox_id, ingest_at, source_uid, _)| {
+            (*mailbox_id, *ingest_at, *source_uid)
+        });
+
+        let mut writer = self.index_writer.lock().await;
+        let mut operations = Vec::with_capacity(ordered.len() * 2);
+        let mut assigned = 0usize;
+
+        for (_, _, _, addr) in ordered {
+            let old_doc: TantivyDocument = searcher
+                .doc(addr)
+                .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
+            let eid = old_doc
+                .get_first(f.f_id)
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default();
+            if eid.is_empty() {
+                continue;
+            }
+
+            let uid = crate::archive::imap::stable_uid::next_uid(account_id)?;
+            // Same reconstruction the tag path uses, so the non-stored fields
+            // (address text, trigram siblings, body) are re-derived instead of
+            // being dropped with the document.
+            let new_doc = rebuild_envelope_doc(
+                &old_doc,
+                Vec::new(),
+                |hash| match BLOB_MANAGER.get_email(hash) {
+                    Ok(Some(bytes)) => Some(bytes.to_vec()),
+                    Ok(None) => {
+                        tracing::warn!(content_hash = hash, "EML not found in blob store");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::warn!(content_hash = hash, error = %e, "failed to fetch EML");
+                        None
+                    }
+                },
+                Some(uid),
+            );
+
+            operations.push(UserOperation::Delete(Term::from_field_text(f.f_id, &eid)));
+            operations.push(UserOperation::Add(new_doc));
+            assigned += 1;
+        }
+
+        if assigned > 0 {
+            writer
+                .run(operations)
+                .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
+            writer
+                .commit()
+                .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
+            tracing::error!(
+                account_id,
+                assigned,
+                "assigned stable IMAP UIDs to documents that had none — an ingest or \
+                 rebuild path failed to assign them"
+            );
+        }
+
+        Ok(assigned)
     }
 
     pub fn search(
@@ -2371,6 +2508,10 @@ impl IndexManager {
 /// `body_of` supplies the raw EML for a content hash — the live tag-update path
 /// reads it from the blob store, the regression test from an in-memory cache.
 ///
+/// `imap_uid_override` replaces the stored stable UID. The tag path passes
+/// `None`, which carries the stored value verbatim (UIDs are write-once); the
+/// backfill passes `Some(uid)` for documents that never had one.
+///
 /// Every non-stored text field is re-derived here: the word-level address text,
 /// their trigram siblings, the attachment names and the body. `field_values()`
 /// only returns *stored* fields, so anything not stored would silently vanish
@@ -2380,13 +2521,15 @@ fn rebuild_envelope_doc(
     old_doc: &TantivyDocument,
     new_tags: impl IntoIterator<Item = String>,
     body_of: impl Fn(&str) -> Option<Vec<u8>>,
+    imap_uid_override: Option<u32>,
 ) -> TantivyDocument {
     let f = SchemaTools::email_fields();
     let mut new_doc = TantivyDocument::new();
 
-    // Stored fields, except tags (re-added at the end).
+    // Stored fields, except tags (re-added at the end) and, when overriding, the
+    // stable UID.
     for (field, value) in old_doc.field_values() {
-        if field != f.f_tags {
+        if field != f.f_tags && !(imap_uid_override.is_some() && field == f.f_imap_uid) {
             new_doc.add_field_value(field, value);
         }
     }
@@ -2479,6 +2622,10 @@ fn rebuild_envelope_doc(
         new_doc.add_facet(f.f_tags, &tag);
     }
 
+    if let Some(uid) = imap_uid_override {
+        new_doc.add_u64(f.f_imap_uid, uid as u64);
+    }
+
     new_doc
 }
 
@@ -2505,6 +2652,7 @@ mod tests {
         doc.add_u64(f.f_account_id, 1);
         doc.add_u64(f.f_mailbox_id, 10);
         doc.add_u64(f.f_uid, 100);
+        doc.add_u64(f.f_imap_uid, 4242);
         doc.add_text(f.f_subject, "Test Subject Line");
         doc.add_text(f.f_subject_tri, "Test Subject Line");
         doc.add_text(f.f_body, "the quick brown fox jumps over the lazy dog");
@@ -2567,9 +2715,12 @@ mod tests {
         new_tags: &HashSet<String>,
         eml_cache: &HashMap<String, Vec<u8>>,
     ) -> TantivyDocument {
-        rebuild_envelope_doc(old_doc, new_tags.iter().cloned(), |hash| {
-            eml_cache.get(hash).cloned()
-        })
+        rebuild_envelope_doc(
+            old_doc,
+            new_tags.iter().cloned(),
+            |hash| eml_cache.get(hash).cloned(),
+            None,
+        )
     }
 
     #[test]
@@ -2713,6 +2864,42 @@ mod tests {
             )
             .unwrap();
         assert_eq!(old_tag_hits, 0, "old tag /unread should have been removed");
+
+        // The stable IMAP UID is stored, so a tag update carries it verbatim:
+        // it is write-once, and re-minting it would move the message for every
+        // incremental IMAP client that already fetched it.
+        let uid_hits = searcher
+            .search(
+                &TermQuery::new(
+                    Term::from_field_u64(f.f_imap_uid, 4242),
+                    IndexRecordOption::Basic,
+                ),
+                &Count,
+            )
+            .unwrap();
+        assert_eq!(uid_hits, 1, "stable IMAP UID should survive a tag update");
+    }
+
+    /// The backfill path passes an override; carrying passes `None`. Either way
+    /// the rebuilt document must hold exactly one stable UID.
+    #[test]
+    fn uid_override_replaces_the_stored_value() {
+        let f = SchemaTools::email_fields();
+        let old = build_test_doc();
+
+        let overridden = rebuild_envelope_doc(&old, Vec::new(), |_| None, Some(7777));
+        let uids: Vec<u64> = overridden
+            .get_all(f.f_imap_uid)
+            .filter_map(|v| v.as_u64())
+            .collect();
+        assert_eq!(uids, vec![7777], "the override must replace, not duplicate");
+
+        let carried = rebuild_envelope_doc(&old, Vec::new(), |_| None, None);
+        let uids: Vec<u64> = carried
+            .get_all(f.f_imap_uid)
+            .filter_map(|v| v.as_u64())
+            .collect();
+        assert_eq!(uids, vec![4242], "carrying keeps the stored UID");
     }
 
     #[test]

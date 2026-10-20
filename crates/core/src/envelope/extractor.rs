@@ -401,12 +401,19 @@ async fn extract_envelope_core(
         .map(|a| a.into_document())
         .collect();
 
+    // Assign the stable archive-side UID here — the last point before a
+    // document exists, and after every path that can decide not to create one
+    // (dedup, archive rules, retention floor). Write-once: every later
+    // reconstruction carries it from the document instead of recomputing.
+    let imap_uid = crate::archive::imap::stable_uid::next_uid(account_id)?;
+
     let envelope = Envelope {
         id: envelope_id,
         message_id,
         account_id,
         mailbox_id,
         uid,
+        imap_uid,
         subject,
         preview,
         from,
@@ -504,6 +511,7 @@ pub fn extract_envelope_from_nested_message(
         account_id,
         mailbox_id: Default::default(),
         uid: Default::default(),
+        imap_uid: Default::default(),
         subject,
         preview: text,
         from,

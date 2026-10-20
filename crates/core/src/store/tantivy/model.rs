@@ -37,7 +37,8 @@ use crate::{
                 fields::{
                     F_ACCOUNT_ID, F_ATTACHMENTS, F_ATTACHMENT_CATEGORY, F_ATTACHMENT_CONTENT_TYPE,
                     F_ATTACHMENT_COUNT, F_CONTENT_HASH, F_DATE, F_ENVELOPE_ID, F_FROM, F_HAS_TEXT,
-                    F_ID, F_INGEST_AT, F_INTERNAL_DATE, F_IS_INDEXED, F_IS_MESSAGE, F_IS_OCR,
+                    F_ID, F_IMAP_UID, F_INGEST_AT, F_INTERNAL_DATE, F_IS_INDEXED, F_IS_MESSAGE,
+                    F_IS_OCR,
                     F_MAILBOX_ID, F_MESSAGE_ID, F_PREVIEW, F_REGULAR_ATTACHMENT_COUNT, F_SHARD_ID,
                     F_SIZE, F_SUBJECT, F_TEXT, F_THREAD_ID, F_UID,
                 },
@@ -92,6 +93,7 @@ impl EnvelopeWithAttachments {
         doc.add_u64(fields.f_account_id, self.envelope.account_id);
         doc.add_u64(fields.f_mailbox_id, self.envelope.mailbox_id);
         doc.add_u64(fields.f_uid, self.envelope.uid as u64);
+        doc.add_u64(fields.f_imap_uid, self.envelope.imap_uid as u64);
         doc.add_text(fields.f_subject, &self.envelope.subject);
         doc.add_text(fields.f_subject_tri, &self.envelope.subject);
         doc.add_text(fields.f_preview, &self.envelope.preview);
@@ -197,6 +199,10 @@ impl EnvelopeWithAttachments {
             mailbox_id,
             mailbox_name: Some(mailbox.name),
             uid: extract_u64_field(doc, fields.f_uid, F_UID)? as u32,
+            // Required on purpose: every document written by the current schema
+            // carries it, so a miss means a schema/format mismatch (see
+            // store::tantivy::format) rather than a recoverable gap.
+            imap_uid: extract_u64_field(doc, fields.f_imap_uid, F_IMAP_UID)? as u32,
             subject: extract_string_field(doc, fields.f_subject, F_SUBJECT)?,
             preview: extract_string_field(doc, fields.f_preview, F_PREVIEW).unwrap_or_default(),
             from: extract_string_field(doc, fields.f_from, F_FROM)?,

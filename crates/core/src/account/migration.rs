@@ -517,6 +517,22 @@ pub struct Account {
     /// `None` for every other account type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<ViewConfig>,
+    /// Archive-side IMAP UID counter: the lowest value that has NOT been handed
+    /// out yet for this account. Block-reserved, monotonic, never regresses.
+    /// 0 = never initialized.
+    ///
+    /// Lives on the account row (not on `MailBox`) because every account write
+    /// is a read-modify-write (`update_impl`), while mailbox rows are rewritten
+    /// wholesale from remote listings (`download/flow.rs`), which would silently
+    /// reset a counter stored there — and a reset counter reissues UIDs.
+    #[serde(default)]
+    pub imap_uid_next: u64,
+    /// UIDVALIDITY generation. Bumped when this account's UID space effectively
+    /// restarts (a restore to an earlier backup point, or a counter found
+    /// behind the index), which invalidates every client cache for the account.
+    /// See `archive::imap::stable_uid::uid_validity`.
+    #[serde(default)]
+    pub imap_uid_generation: u32,
 }
 
 impl MemDbModel for Account {
@@ -595,6 +611,8 @@ impl Account {
             hold_released_at: None,
             kind: request.kind,
             view: request.view,
+            imap_uid_next: 0,
+            imap_uid_generation: 0,
         })
     }
 

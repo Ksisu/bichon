@@ -39,6 +39,7 @@ use std::time::Duration;
 
 use bichon_blob::{Codec, Config, Engine, Error as BlobError};
 use bichon_core::{
+    archive::imap::stable_uid::AccountUidAssigner,
     error::{code::ErrorCode, BichonResult},
     ext::text_extractor,
     message::content::AttachmentInfo,
@@ -366,6 +367,7 @@ fn execute(
     };
 
     // ── Phases A + B, building into the temp `.new` root. ──
+    let mut uids = AccountUidAssigner::new();
     let mut report = match run_phases(
         old_email.as_ref(),
         old_attach.as_ref(),
@@ -374,6 +376,7 @@ fn execute(
         blobs,
         args.skip_attachment_text,
         &mut skip,
+        &mut uids,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -382,9 +385,28 @@ fn execute(
         }
     };
 
-    // ── Wrap-up 1: stamp the format marker, then sanity-check the freshly built
-    // indexes BEFORE anything is swapped in. A failure here aborts with the live
-    // indexes untouched. ──
+    // Accounts that mixed carried and freshly assigned UIDs: normal rebuilds are
+    // all-or-nothing per account, so this means the old index was already
+    // inconsistent. The rebuild still succeeds (fresh numbers are assigned above
+    // every carried one), but it is worth surfacing.
+    for account_id in uids.mixed_accounts() {
+        skip.record(skip_record(
+            "mixed_uid_state",
+            "email",
+            "-",
+            0,
+            Some(format!(
+                "account {account_id} had both carried and freshly assigned IMAP UIDs"
+            )),
+            None,
+        ));
+    }
+
+    // ── Wrap-up 1: stamp the format marker, sanity-check the freshly built
+    // indexes, and persist the UID counters BEFORE anything is swapped in. A
+    // failure here aborts with the live indexes untouched. Persisting the
+    // counters before the swap is the safe order: the counter may end up ahead
+    // of a live index (wasted numbers), never behind it (reissued numbers).
     let pre_swap = (|| -> BichonResult<()> {
         if email_ok {
             write_index_format_version(&new_envelope).map_err(|e| {
@@ -397,6 +419,7 @@ fn execute(
                 SchemaTools::email_fields().f_id,
                 "email",
             )?;
+            validate_stable_uids(&new_envelope)?;
         }
         if attach_ok {
             write_index_format_version(&new_attachment).map_err(|e| {
@@ -412,6 +435,13 @@ fn execute(
                 SchemaTools::attachment_fields().f_id,
                 "attachment",
             )?;
+        }
+        if email_ok {
+            // Persist the counters the rebuild produced. Opening memdb from the
+            // resolved root (not `DB_MANAGER`) matches the rest of this tool:
+            // it operates on the root it was pointed at.
+            let db = bichon_core::admin::meta::open_database(root.join("memdb"))?;
+            uids.finish(&db)?;
         }
         Ok(())
     })();
@@ -499,6 +529,7 @@ fn run_phases(
     blobs: &Engine,
     skip_text: bool,
     skip: &mut SkipReport,
+    uids: &mut AccountUidAssigner,
 ) -> BichonResult<ReindexReport> {
     let mut report = ReindexReport::default();
 
@@ -515,6 +546,7 @@ fn run_phases(
             blobs,
             &pb,
             skip,
+            uids,
         )?;
         pb.finish_and_clear();
         report.emails = stats.docs;
@@ -625,6 +657,9 @@ struct OldEmailFields {
     account_id: Field,
     mailbox_id: Field,
     uid: Field,
+    /// `None` on a pre-v3 index: those documents never had a stable UID, and
+    /// the rebuild assigns one instead of carrying it.
+    imap_uid: Option<Field>,
     subject: Field,
     preview: Field,
     content_hash: Field,
@@ -660,6 +695,9 @@ impl OldEmailFields {
             account_id: g("account_id")?,
             mailbox_id: g("mailbox_id")?,
             uid: g("uid")?,
+            // Absent on a pre-v3 index, which is a normal state (not an error):
+            // those documents get a freshly assigned stable UID.
+            imap_uid: schema.get_field("imap_uid").ok(),
             subject: g("subject")?,
             preview: g("preview")?,
             content_hash: g("content_hash")?,
@@ -754,6 +792,7 @@ fn rebuild_email(
     blobs: &Engine,
     pb: &ProgressBar,
     skip: &mut SkipReport,
+    uids: &mut AccountUidAssigner,
 ) -> BichonResult<PhaseStats> {
     std::fs::create_dir_all(rebuild_dir).map_err(|e| {
         raise_error!(
@@ -814,7 +853,7 @@ fn rebuild_email(
                 }
             };
 
-            let (envelope, attachments, shard_id) = match envelope_from_old_doc(&doc, of) {
+            let (mut envelope, attachments, shard_id) = match envelope_from_old_doc(&doc, of) {
                 Ok(v) => v,
                 Err(e) => {
                     skip.record(skip_record(
@@ -829,6 +868,16 @@ fn rebuild_email(
                     continue;
                 }
             };
+
+            // Write-once: a document that already carries a stable UID keeps it
+            // (the UID is what clients have seen); one that does not gets a
+            // fresh number from the per-account counter, which is always above
+            // every carried UID of that account.
+            if envelope.imap_uid > 0 {
+                uids.carry(envelope.account_id, envelope.imap_uid);
+            } else {
+                envelope.imap_uid = uids.assign(envelope.account_id)?;
+            }
 
             let body = match &last_body {
                 Some((h, b)) if h == &envelope.content_hash => b.clone(),
@@ -1137,6 +1186,13 @@ fn envelope_from_old_doc(
         mailbox_id: req_u64(doc, of.mailbox_id, "mailbox_id")?,
         mailbox_name: None,
         uid: req_u64(doc, of.uid, "uid")? as u32,
+        // Carried verbatim when the old document had one (write-once), 0 when
+        // the old index predates the field. `rebuild_email` resolves the 0 case
+        // by assigning from the per-account counter.
+        imap_uid: of
+            .imap_uid
+            .and_then(|f| opt_u64(doc, f))
+            .unwrap_or(0) as u32,
         subject: req_str(doc, of.subject, "subject")?,
         preview: opt_str(doc, of.preview).unwrap_or_default(),
         from: req_str(doc, of.from, "from")?,
@@ -1526,6 +1582,99 @@ fn validate_rebuild(
     Ok(())
 }
 
+/// Gate the rebuilt email index on the stable-UID invariants that make IMAP
+/// incremental clients safe: every document carries a non-zero `imap_uid`, and
+/// no two documents of the same account share one.
+///
+/// Without this, a rebuild bug (a missed carry, a counter that started too low)
+/// would silently hand the same UID to two messages — exactly the failure this
+/// whole mechanism exists to prevent — and only show up later as mail that
+/// clients never fetch. Failing here keeps the live index in place.
+///
+/// Pairs are collected and sorted rather than hashed: it is an exact check at
+/// 12 bytes per document instead of a hash-table-sized one.
+fn validate_stable_uids(dir: &Path) -> BichonResult<()> {
+    let index = Index::open_in_dir(dir).map_err(|e| {
+        raise_error!(
+            format!("validation: cannot open rebuilt email index {:?}: {e:#?}", dir),
+            ErrorCode::InternalError
+        )
+    })?;
+    let fields = SchemaTools::email_fields();
+    let reader = index.reader().map_err(|e| {
+        raise_error!(
+            format!("validation: cannot create reader for rebuilt email index: {e:#?}"),
+            ErrorCode::InternalError
+        )
+    })?;
+    reader.reload().map_err(|e| {
+        raise_error!(
+            format!("validation: reader reload failed for rebuilt email index: {e:#?}"),
+            ErrorCode::InternalError
+        )
+    })?;
+    let searcher = reader.searcher();
+
+    let mut pairs: Vec<(u64, u32)> = Vec::with_capacity(searcher.num_docs() as usize);
+    for seg in searcher.segment_readers() {
+        let seg_id = seg.segment_id().uuid_string();
+        let store = seg.get_store_reader(1).map_err(|e| {
+            raise_error!(format!("validation: cannot read doc store: {e:#?}"), ErrorCode::InternalError)
+        })?;
+        let alive = seg.alive_bitset();
+        for doc_id in 0..seg.max_doc() {
+            if let Some(a) = alive {
+                if !a.is_alive(doc_id) {
+                    continue;
+                }
+            }
+            let doc: TantivyDocument = store.get(doc_id).map_err(|e| {
+                raise_error!(
+                    format!("validation: cannot read document {doc_id} of {seg_id}: {e:#?}"),
+                    ErrorCode::InternalError
+                )
+            })?;
+            let account_id = doc
+                .get_first(fields.f_account_id)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let imap_uid = doc
+                .get_first(fields.f_imap_uid)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            if imap_uid == 0 {
+                return Err(raise_error!(
+                    format!(
+                        "validation: document {doc_id} of {seg_id} (account {account_id}) has no stable IMAP UID"
+                    ),
+                    ErrorCode::InternalError
+                ));
+            }
+            pairs.push((account_id, imap_uid as u32));
+        }
+    }
+
+    pairs.sort_unstable();
+    for window in pairs.windows(2) {
+        if window[0] == window[1] {
+            return Err(raise_error!(
+                format!(
+                    "validation: stable IMAP UID {} is assigned to two documents of account {}",
+                    window[0].1, window[0].0
+                ),
+                ErrorCode::InternalError
+            ));
+        }
+    }
+
+    println!(
+        "{} email index stable UIDs validated: {} unique (account, uid) pairs",
+        style("✓").green(),
+        pairs.len()
+    );
+    Ok(())
+}
+
 fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
     let mut last = None;
     for _ in 0..3 {
@@ -1706,6 +1855,54 @@ mod tests {
     /// JSON) + 1 attachment, all with **no** INDEX_FORMAT marker. The second
     /// email's blob is deliberately absent so the run exercises the
     /// `missing_body` report path.
+    /// Write `(eid, account_id, imap_uid)` documents into a fresh v3 index.
+    fn build_uid_fixture(prefix: &str, docs: &[(&str, u64, u64)]) -> PathBuf {
+        let dir = temp_root(prefix);
+        let index = Index::create_in_dir(&dir, SchemaTools::email_schema()).unwrap();
+        index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
+        let mut writer = index.writer_with_num_threads(1, 15_000_000).unwrap();
+        let f = SchemaTools::email_fields();
+        for (eid, account_id, imap_uid) in docs {
+            let mut doc = TantivyDocument::new();
+            doc.add_text(f.f_id, *eid);
+            doc.add_u64(f.f_account_id, *account_id);
+            doc.add_u64(f.f_imap_uid, *imap_uid);
+            writer.add_document(doc).unwrap();
+        }
+        writer.commit().unwrap();
+        drop(writer);
+        drop(index);
+        dir
+    }
+
+    /// The gate that turns a silent rebuild bug into a failed reindex: a
+    /// duplicate or missing stable UID would make incremental IMAP clients skip
+    /// messages, and by then the live index is already gone.
+    #[test]
+    fn t9_stable_uid_validation_rejects_duplicates_and_gaps() {
+        let ok = build_uid_fixture("uid-gate-ok", &[("env-1", 1, 5), ("env-2", 1, 6), ("env-3", 2, 5)]);
+        validate_stable_uids(&ok).expect("distinct (account, uid) pairs must pass");
+        let _ = std::fs::remove_dir_all(&ok);
+
+        let duplicate =
+            build_uid_fixture("uid-gate-dup", &[("env-1", 1, 5), ("env-2", 1, 5)]);
+        let err = validate_stable_uids(&duplicate).expect_err("a duplicate must fail");
+        assert!(
+            format!("{err:?}").contains("assigned to two documents"),
+            "unexpected error: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&duplicate);
+
+        let unassigned = build_uid_fixture("uid-gate-zero", &[("env-1", 1, 0)]);
+        let err = validate_stable_uids(&unassigned).expect_err("an unassigned UID must fail");
+        assert!(
+            format!("{err:?}").contains("no stable IMAP UID"),
+            "unexpected error: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&unassigned);
+    }
+
     fn build_fixture(prefix: &str) -> (PathBuf, ResolvedDirs) {
         let root = temp_root(prefix);
         let dirs = resolve_dirs(&root, None, None);

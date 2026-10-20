@@ -36,7 +36,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::migrate::is_tantivy_index_dir;
-use crate::store::tantivy::fields::F_SUBJECT_TRI;
+use crate::store::tantivy::fields::F_IMAP_UID;
 
 /// Current index schema generation.
 ///
@@ -46,12 +46,13 @@ use crate::store::tantivy::fields::F_SUBJECT_TRI;
 /// - 1 = legacy: whichlang-stemmed word tokenizer, no trigram sibling fields
 ///       (a missing marker file is treated as 1)
 /// - 2 = deterministic word tokenizer + trigram sibling fields
+/// - 3 = + imap_uid field (stable archive-side IMAP UID)
 ///
 /// Bump this whenever the schema changes **or** a reindex becomes necessary for
 /// any other reason (e.g. a future tokenizer change that leaves the schema
 /// untouched). The check compares the on-disk marker against this constant, so
 /// bumping it alone is enough to gate older indexes behind the reindex flow.
-pub const CURRENT_INDEX_FORMAT_VERSION: u32 = 2;
+pub const CURRENT_INDEX_FORMAT_VERSION: u32 = 3;
 
 const INDEX_FORMAT_FILE: &str = "INDEX_FORMAT";
 
@@ -89,9 +90,11 @@ pub fn read_index_format_version(dir: &Path) -> Option<u32> {
 /// reindex. Stamping it here fixes that.
 ///
 /// The marker is written **only** when the on-disk schema already proves the
-/// current format (it carries the trigram sibling field). A legacy index never
-/// has that field, so it is never stamped and still goes through the reindex
-/// gate. Returns `true` when a marker was written.
+/// current format (it carries the `imap_uid` field). Older generations never
+/// have that field — note a v2 index *does* carry the trigram siblings, so the
+/// discriminator has to be the newest field, not `subject_tri` — so they are
+/// never stamped and still go through the reindex gate. Returns `true` when a
+/// marker was written.
 pub fn heal_index_format_marker(dir: &Path) -> bool {
     if read_index_format_version(dir).is_some() {
         return false;
@@ -99,7 +102,7 @@ pub fn heal_index_format_marker(dir: &Path) -> bool {
     let Ok(index) = tantivy::Index::open_in_dir(dir) else {
         return false;
     };
-    if index.schema().get_field(F_SUBJECT_TRI).is_err() {
+    if index.schema().get_field(F_IMAP_UID).is_err() {
         return false;
     }
     write_index_format_version(dir).is_ok()
@@ -198,7 +201,7 @@ mod tests {
 
     /// A crash between creating the index and stamping it leaves an unmarked
     /// index. It must be healed — but only when its schema proves the current
-    /// format, never for a legacy index.
+    /// format, never for an older generation.
     #[test]
     fn heals_a_missing_marker_only_for_the_current_schema() {
         use crate::store::tantivy::schema::SchemaTools;
@@ -227,5 +230,27 @@ mod tests {
         );
         assert_eq!(read_index_format_version(&old_dir), None);
         drop(legacy);
+    }
+
+    /// A v2 index carries the trigram siblings but no `imap_uid`. It must NOT be
+    /// healed: stamping it would let the startup gate through and every later
+    /// read would hit a missing required field.
+    #[test]
+    fn v2_schema_is_never_healed() {
+        let dir = temp_dir("heal-v2");
+        let mut b = tantivy::schema::Schema::builder();
+        b.add_text_field("subject", tantivy::schema::TEXT);
+        b.add_text_field(
+            crate::store::tantivy::fields::F_SUBJECT_TRI,
+            tantivy::schema::TEXT,
+        );
+        let v2 = tantivy::Index::create_in_dir(&dir, b.build()).unwrap();
+
+        assert!(
+            !heal_index_format_marker(&dir),
+            "a v2 index (trigram siblings, no imap_uid) must not be stamped"
+        );
+        assert_eq!(read_index_format_version(&dir), None);
+        drop(v2);
     }
 }

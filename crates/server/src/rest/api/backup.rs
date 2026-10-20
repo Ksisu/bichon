@@ -156,7 +156,6 @@ struct ManifestView {
     /// Total object count referenced by this restore point.
     object_count: usize,
     memdb: Option<ObjectView>,
-    imap_uid: Option<ObjectView>,
     segments: Vec<ObjectView>,
     audit: Option<AuditView>,
     integrity: Option<ObjectView>,
@@ -614,7 +613,6 @@ fn manifest_view(m: Manifest) -> ManifestView {
         created: m.created,
         trigger: m.trigger,
         memdb: objects.memdb.as_ref().map(object_view),
-        imap_uid: objects.imap_uid.as_ref().map(object_view),
         segments: objects
             .blob_segments
             .iter()
