@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "Zablokuj ponownie",
     "cc": "DW",
     "clickToDownload": "Kliknij, aby pobrać",
+    "copied": "Skopiowano do schowka",
+    "copyFailed": "Nie udało się skopiować",
+    "copyId": "Copy ID",
     "date": "Data",
     "delete": "Usuń",
     "download": "Pobierz",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "Np.: invoice.pdf",
     "category": "Kategoria załącznika",
     "content_type": "Typ pliku",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "Identyfikator koperty",
     "extension": "Rozszerzenie pliku",
     "has_attachment": "Zawiera załącznik",
     "is_message": "Załącznik w formacie e-mail",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "Wyczyść wszystkie tagi",
     "label": "Tagi",
+    "no_tags": "Brak tagów",
     "no_tags_found": "Nie znaleziono tagów",
     "search_placeholder": "Szukaj tagów..."
   },

@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "Blockera igen",
     "cc": "Kopia",
     "clickToDownload": "Klicka för att ladda ner",
+    "copied": "Kopierat till urklipp",
+    "copyFailed": "Det gick inte att kopiera",
+    "copyId": "Copy ID",
     "date": "Datum",
     "delete": "Ta bort",
     "download": "Ladda ner",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "t.ex. invoice.pdf",
     "category": "Bilagskategori",
     "content_type": "Filtyp",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "Kuvert-ID",
     "extension": "Filändelse",
     "has_attachment": "Har bilaga",
     "is_message": "Bilaga i e-postformat",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "Rensa alla taggar",
     "label": "Taggar",
+    "no_tags": "Inga taggar",
     "no_tags_found": "Inga taggar hittades",
     "search_placeholder": "Sök taggar..."
   },

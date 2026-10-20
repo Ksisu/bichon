@@ -661,6 +661,17 @@ fn regex_escape(text: &str) -> String {
         ]))
     }
 
+    /// Exact match on a message's own envelope id.
+    ///
+    /// `f_id` is a `STRING` field, so the term is the whole value: no
+    /// tokenisation, no prefix matching, and case-sensitive as stored. A
+    /// non-existent id yields no documents rather than an error.
+    fn envelope_id_query(id: &str) -> Box<dyn Query> {
+        let f = SchemaTools::email_fields();
+        let term = Term::from_field_text(f.f_id, id);
+        Box::new(TermQuery::new(term, IndexRecordOption::Basic))
+    }
+
     fn filter_query(
         &self,
         scope: Option<&[ViewScopeGroup]>,
@@ -852,9 +863,7 @@ fn regex_escape(text: &str) -> String {
         }
 
         if let Some(ref id) = filter.id {
-            let term = Term::from_field_text(f.f_id, id);
-            let query = TermQuery::new(term, IndexRecordOption::Basic);
-            subqueries.push((Occur::Must, Box::new(query)));
+            subqueries.push((Occur::Must, Self::envelope_id_query(id)));
         }
 
         if let Some(ref extension) = filter.attachment_extension {
@@ -3825,6 +3834,76 @@ mod tests {
             matching_ids(IndexManager::has_tags_query(true)),
             vec!["id-one-tag".to_string(), "id-two-tags".to_string()],
             "has_tags=true must keep every tagged message"
+        );
+    }
+
+    /// The envelope-id filter has to be a whole-value match.
+    ///
+    /// The ids below share a 34-character prefix and two of them differ only
+    /// in case, which is what an exact lookup must not confuse: a tokenised or
+    /// case-folding query would return the wrong message, and returning a
+    /// near-miss is worse than returning nothing when the caller pasted an id
+    /// to identify one specific mail.
+    #[test]
+    fn envelope_id_query_is_an_exact_match() {
+        let f = SchemaTools::email_fields();
+        let index = Index::create_in_ram(SchemaTools::email_schema());
+        index.tokenizers().register("euro", EuroTokenizer::new());
+
+        let ids = [
+            "550e8400-e29b-41d4-a716-446655440000",
+            "550e8400-e29b-41d4-a716-446655440001",
+            "550E8400-E29B-41D4-A716-446655440000",
+        ];
+
+        {
+            let mut writer = index
+                .writer_with_num_threads(1, 15_000_000)
+                .expect("writer");
+
+            for (i, id) in ids.iter().enumerate() {
+                let mut doc = TantivyDocument::new();
+                doc.add_text(f.f_id, *id);
+                doc.add_text(f.f_message_id, format!("<{id}@test>"));
+                doc.add_u64(f.f_account_id, 1);
+                doc.add_u64(f.f_mailbox_id, 10);
+                doc.add_u64(f.f_uid, i as u64 + 1);
+                doc.add_text(f.f_content_hash, format!("hash-{i}"));
+                writer.add_document(doc).unwrap();
+            }
+
+            writer.commit().unwrap();
+        }
+
+        let reader = index.reader().expect("reader");
+        reader.reload().unwrap();
+        let searcher = reader.searcher();
+
+        let matching_ids = |query: Box<dyn Query>| -> Vec<String> {
+            let mut found: Vec<String> = searcher
+                .search(&*query, &DocSetCollector)
+                .expect("search")
+                .into_iter()
+                .map(|addr| {
+                    let doc: TantivyDocument = searcher.doc(addr).unwrap();
+                    doc.get_first(f.f_id).unwrap().as_str().unwrap().to_string()
+                })
+                .collect();
+            found.sort();
+            found
+        };
+
+        for id in ids.iter() {
+            assert_eq!(
+                matching_ids(IndexManager::envelope_id_query(id)),
+                vec![id.to_string()],
+                "the id {id} must match itself and nothing that shares its prefix or differs only in case"
+            );
+        }
+
+        assert!(
+            matching_ids(IndexManager::envelope_id_query("no-such-id")).is_empty(),
+            "an unknown id must match nothing rather than fall back to a fuzzy hit"
         );
     }
 }

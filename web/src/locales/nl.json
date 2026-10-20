@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "Opnieuw blokkeren",
     "cc": "CC",
     "clickToDownload": "Klik om te downloaden",
+    "copied": "Gekopieerd naar klembord",
+    "copyFailed": "Kopiëren mislukt",
+    "copyId": "Copy ID",
     "date": "Datum",
     "delete": "Verwijderen",
     "download": "Downloaden",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "Bijv.: invoice.pdf",
     "category": "Bijlagecategorie",
     "content_type": "Bestandstype",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "Envelope-ID",
     "extension": "Bestandsextensie",
     "has_attachment": "Bevat bijlage",
     "is_message": "Bijlage in e-mail-formaat",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "Alle tags wissen",
     "label": "Tags",
+    "no_tags": "Geen tags",
     "no_tags_found": "Geen tags gevonden",
     "search_placeholder": "Tags zoeken..."
   },

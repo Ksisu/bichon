@@ -135,8 +135,16 @@ export function TagFilterPopover() {
                             onClick={(e) => e.stopPropagation()}
                         />
 
+                        {/*
+                         * The browser forwards a click on the label to the
+                         * checkbox, which fires onCheckedChange; letting the
+                         * original click bubble to the row as well would toggle
+                         * twice and cancel out. Stopping it here keeps the row
+                         * and the label each worth exactly one toggle.
+                         */}
                         <Label
                             htmlFor="no-tags-option"
+                            onClick={(e) => e.stopPropagation()}
                             className="flex-1 truncate text-xs cursor-pointer"
                         >
                             {t('tag.no_tags')}
@@ -198,8 +206,10 @@ export function TagFilterPopover() {
                                         }
                                     />
 
+                                    {/* Same double-toggle guard as "no tags". */}
                                     <Label
                                         htmlFor={id}
+                                        onClick={(e) => e.stopPropagation()}
                                         className="flex-1 truncate text-xs cursor-pointer"
                                         title={tag}
                                     >

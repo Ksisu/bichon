@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "Blokker igjen",
     "cc": "Kopi",
     "clickToDownload": "Klikk for å laste ned",
+    "copied": "Kopiert til utklippstavlen",
+    "copyFailed": "Kunne ikke kopiere",
+    "copyId": "Copy ID",
     "date": "Dato",
     "delete": "Slett",
     "download": "Last ned",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "F.eks.: invoice.pdf",
     "category": "Vedleggskategori",
     "content_type": "Filtype",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "Envelope-ID",
     "extension": "Filendelse",
     "has_attachment": "Har vedlegg",
     "is_message": "Vedlegg i e-postformat",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "Fjern alle etiketter",
     "label": "Etiketter",
+    "no_tags": "Ingen tags",
     "no_tags_found": "Ingen etiketter funnet",
     "search_placeholder": "Søk etter etiketter..."
   },

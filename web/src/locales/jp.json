@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "再度ブロック",
     "cc": "CC",
     "clickToDownload": "クリックしてダウンロード",
+    "copied": "クリップボードにコピーしました",
+    "copyFailed": "コピーに失敗しました",
+    "copyId": "Copy ID",
     "date": "日付",
     "delete": "削除",
     "download": "ダウンロード",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "例: invoice.pdf",
     "category": "添付ファイルカテゴリ",
     "content_type": "ファイルタイプ",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "エンベロープID",
     "extension": "拡張子",
     "has_attachment": "添付ファイルあり",
     "is_message": "メール形式の添付ファイル",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "すべてのタグをクリア",
     "label": "タグ",
+    "no_tags": "タグなし",
     "no_tags_found": "タグが見つかりません",
     "search_placeholder": "タグを検索..."
   },

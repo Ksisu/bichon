@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "다시 차단",
     "cc": "참조",
     "clickToDownload": "클릭하여 다운로드",
+    "copied": "클립보드에 복사되었습니다",
+    "copyFailed": "복사 실패",
+    "copyId": "Copy ID",
     "date": "날짜",
     "delete": "삭제",
     "download": "다운로드",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "예: invoice.pdf",
     "category": "첨부 파일 카테고리",
     "content_type": "파일 형식",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "엔벨로프 ID",
     "extension": "파일 확장자",
     "has_attachment": "첨부파일 포함",
     "is_message": "이메일 형식 첨부 파일",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "모든 태그 지우기",
     "label": "태그",
+    "no_tags": "태그 없음",
     "no_tags_found": "태그를 찾을 수 없습니다",
     "search_placeholder": "태그 검색..."
   },

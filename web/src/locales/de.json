@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "Wieder blockieren",
     "cc": "CC",
     "clickToDownload": "Zum Herunterladen klicken",
+    "copied": "In die Zwischenablage kopiert",
+    "copyFailed": "Kopieren fehlgeschlagen",
+    "copyId": "Copy ID",
     "date": "Datum",
     "delete": "Löschen",
     "download": "Herunterladen",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "z. B. invoice.pdf",
     "category": "Anhangskategorie",
     "content_type": "Dateityp",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "Envelope-ID",
     "extension": "Dateiendung",
     "has_attachment": "Mit Anhang",
     "is_message": "E-Mail-Format-Anhang",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "Alle Tags löschen",
     "label": "Tags",
+    "no_tags": "Keine Tags",
     "no_tags_found": "Keine Tags gefunden",
     "search_placeholder": "Tags suchen..."
   },

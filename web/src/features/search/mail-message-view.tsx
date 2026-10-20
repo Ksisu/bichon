@@ -19,7 +19,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Loader, Download, Trash2, MessageSquareMore, FileText, FileImage, FileVideo, FileArchive, FileSpreadsheet, FileCode, FileIcon, FileAudio, Upload, ShieldCheck, Pencil } from 'lucide-react';
+import { Loader, Download, Trash2, MessageSquareMore, FileText, FileImage, FileVideo, FileArchive, FileSpreadsheet, FileCode, FileIcon, FileAudio, Upload, ShieldCheck, Pencil, Copy } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -260,6 +260,17 @@ export function MailMessageView({
     }
   };
 
+  // The id is what the "Advanced" popover searches on, so the header is where
+  // a user picks it up — the row is a dense one-liner, hence the icon button.
+  const copyEnvelopeId = async () => {
+    try {
+      await navigator.clipboard.writeText(envelope.id);
+      toast({ title: t('mail.copied') });
+    } catch {
+      toast({ title: t('mail.copyFailed'), variant: 'destructive' });
+    }
+  };
+
   return (
     <div className="flex flex-col">
       {showHeader && <div className="grid gap-1 text-xs">
@@ -267,9 +278,22 @@ export function MailMessageView({
           <span className="font-medium text-gray-400">{t('mail.account')}:</span>
           <span>{getEmailById(envelope.account_id)}</span>
         </div>
-        <div className="flex space-x-2">
+        <div className="flex items-center space-x-2">
           <span className="font-medium text-gray-400">{t('mail.id')}:</span>
           <span>{envelope.id}</span>
+          <Tooltip delayDuration={800}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={copyEnvelopeId}
+                className="h-5 w-5"
+              >
+                <Copy className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t('mail.copyId')}</TooltipContent>
+          </Tooltip>
         </div>
         {envelope.from && (
           <div className="flex space-x-2">

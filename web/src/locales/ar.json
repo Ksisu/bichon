@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "حظر مجدداً",
     "cc": "نسخة",
     "clickToDownload": "انقر للتنزيل",
+    "copied": "تم النسخ إلى الحافظة",
+    "copyFailed": "فشل النسخ",
+    "copyId": "Copy ID",
     "date": "التاريخ",
     "delete": "حذف",
     "download": "تحميل",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "مثال: invoice.pdf",
     "category": "فئة المرفق",
     "content_type": "نوع الملف",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "معرف المغلف",
     "extension": "امتداد الملف",
     "has_attachment": "يحتوي على مرفق",
     "is_message": "مرفق بتنسيق بريد إلكتروني",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "مسح جميع الوسوم",
     "label": "الوسوم",
+    "no_tags": "بدون وسوم",
     "no_tags_found": "لم يتم العثور على وسوم",
     "search_placeholder": "بحث عن الوسوم..."
   },

@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "Estä uudelleen",
     "cc": "Kopio",
     "clickToDownload": "Napsauta ladataksesi",
+    "copied": "Kopioitu leikepöydälle",
+    "copyFailed": "Kopiointi epäonnistui",
+    "copyId": "Copy ID",
     "date": "Päivämäärä",
     "delete": "Poista",
     "download": "Lataa",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "Esim.: invoice.pdf",
     "category": "Liitekategoria",
     "content_type": "Tiedostotyyppi",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "Kuori-ID",
     "extension": "Tiedostopääte",
     "has_attachment": "Sisältää liitteen",
     "is_message": "Sähköpostimuotoinen liite",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "Tyhjennä kaikki tunnisteet",
     "label": "Tunnisteet",
+    "no_tags": "Ei tageja",
     "no_tags_found": "Tunnisteita ei löytynyt",
     "search_placeholder": "Hae tunnisteita..."
   },

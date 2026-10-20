@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "Заблокировать снова",
     "cc": "Копия",
     "clickToDownload": "Нажмите, чтобы скачать",
+    "copied": "Скопировано в буфер обмена",
+    "copyFailed": "Не удалось скопировать",
+    "copyId": "Copy ID",
     "date": "Дата",
     "delete": "Удалить",
     "download": "Скачать",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "Например: invoice.pdf",
     "category": "Категория вложения",
     "content_type": "Тип файла",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "Идентификатор конверта",
     "extension": "Расширение файла",
     "has_attachment": "Есть вложение",
     "is_message": "Вложение в формате письма",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "Очистить все теги",
     "label": "Теги",
+    "no_tags": "Без тегов",
     "no_tags_found": "Теги не найдены",
     "search_placeholder": "Поиск тегов..."
   },

@@ -1620,6 +1620,9 @@
     "blockRemoteAgain": "Bloquear de nuevo",
     "cc": "CC",
     "clickToDownload": "Hacer clic para descargar",
+    "copied": "Copiado al portapapeles",
+    "copyFailed": "Error al copiar",
+    "copyId": "Copy ID",
     "date": "Fecha",
     "delete": "Eliminar",
     "download": "Descargar",
@@ -2296,6 +2299,8 @@
     "attachment_name_placeholder": "Ej.: invoice.pdf",
     "category": "Categoría de adjunto",
     "content_type": "Tipo de archivo",
+    "envelope_id_description": "Match the message's internal ID exactly",
+    "envelope_id_label": "ID del sobre",
     "extension": "Extensión de archivo",
     "has_attachment": "Con archivo adjunto",
     "is_message": "Adjunto formato e-mail",
@@ -2748,6 +2753,7 @@
   "tag": {
     "clear_all": "Borrar todas las etiquetas",
     "label": "Etiquetas",
+    "no_tags": "Sin etiquetas",
     "no_tags_found": "No se encontraron etiquetas",
     "search_placeholder": "Buscar etiquetas..."
   },
