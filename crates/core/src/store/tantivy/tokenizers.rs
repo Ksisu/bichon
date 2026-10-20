@@ -17,10 +17,10 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use deunicode::deunicode;
-use tantivy::query::{BooleanQuery, BoostQuery, EmptyQuery, Occur, Query, TermQuery};
+use tantivy::query::{BooleanQuery, BoostQuery, EmptyQuery, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption};
 use tantivy::tokenizer::*;
-use tantivy::Term;
+use tantivy::{Index, Term};
 
 use crate::store::tantivy::filter::DeunicodeFilter;
 
@@ -144,31 +144,90 @@ fn tri_field_subquery(field: Field, term: &str) -> Box<dyn Query> {
     Box::new(BooleanQuery::new(variants))
 }
 
-/// Fuzzy subquery for a query text over the given trigram fields: split on
-/// whitespace, leave-one-out per term, and OR both across fields and across
-/// terms — matching the word-level layer's default OR semantics.
-pub fn tri_query(tri_fields: &[Field], text: &str) -> Box<dyn Query> {
-    let mut per_field: Vec<(Occur, Box<dyn Query>)> = Vec::new();
-    for field in tri_fields {
-        let mut per_term: Vec<(Occur, Box<dyn Query>)> = Vec::new();
-        for term in text.split_whitespace() {
-            per_term.push((Occur::Should, tri_field_subquery(*field, term)));
-        }
-        per_field.push((Occur::Should, Box::new(BooleanQuery::new(per_term))));
+/// Fuzzy subquery for a query text over the given trigram fields.
+///
+/// Terms are **AND**-ed and fields are OR-ed, mirroring the word-level parser
+/// under conjunction: every term must match in at least one of the fields.
+///
+/// If any term is too short to produce grams (fewer than 3 characters) the
+/// trigram layer cannot express that conjunction faithfully — an empty clause
+/// would make the whole conjunct false — so it returns `EmptyQuery` and the word
+/// layer answers the query alone. The same applies to an empty field list.
+fn tri_query_with(tri_fields: &[Field], text: &str, match_all: bool) -> Box<dyn Query> {
+    let terms: Vec<&str> = text.split_whitespace().collect();
+    if tri_fields.is_empty() || terms.is_empty() {
+        return Box::new(EmptyQuery);
     }
-    Box::new(BooleanQuery::new(per_field))
+    // Under AND a gram-less term (fewer than 3 characters) would make the whole
+    // conjunct false, so the trigram layer steps aside and the word layer
+    // answers alone. Under OR such a term simply contributes nothing.
+    if match_all && terms.iter().any(|t| trigrams(t).is_empty()) {
+        return Box::new(EmptyQuery);
+    }
+
+    let term_occur = if match_all { Occur::Must } else { Occur::Should };
+    let mut per_term: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+    for term in terms {
+        let mut per_field: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+        for field in tri_fields {
+            per_field.push((Occur::Should, tri_field_subquery(*field, term)));
+        }
+        per_term.push((term_occur, Box::new(BooleanQuery::new(per_field))));
+    }
+    Box::new(BooleanQuery::new(per_term))
 }
 
-/// Combine: word-level exact (boost 3.0) OR trigram fuzzy (boost 1.0).
-///
-/// Word-level hits always rank first; trigram only adds inflection/substring
-/// recall, and short terms with no grams degrade to a pure word-level query.
-pub fn word_or_tri(word: Box<dyn Query>, tri_fields: &[Field], text: &str) -> Box<dyn Query> {
-    let tri = tri_query(tri_fields, text);
+/// Fuzzy subquery with terms AND-ed (the current default).
+pub fn tri_query(tri_fields: &[Field], text: &str) -> Box<dyn Query> {
+    tri_query_with(tri_fields, text, true)
+}
+
+/// Fuzzy subquery with terms OR-ed — used only for legacy saved searches that
+/// were authored before the switch to AND.
+pub fn tri_query_any(tri_fields: &[Field], text: &str) -> Box<dyn Query> {
+    tri_query_with(tri_fields, text, false)
+}
+
+fn word_or_tri_with(
+    word: Box<dyn Query>,
+    tri_fields: &[Field],
+    text: &str,
+    match_all: bool,
+) -> Box<dyn Query> {
+    let tri = tri_query_with(tri_fields, text, match_all);
     Box::new(BooleanQuery::new(vec![
         (Occur::Should, Box::new(BoostQuery::new(word, 3.0))),
         (Occur::Should, Box::new(BoostQuery::new(tri, 1.0))),
     ]))
+}
+
+/// Word level (AND) OR trigram (AND).
+pub fn word_or_tri(word: Box<dyn Query>, tri_fields: &[Field], text: &str) -> Box<dyn Query> {
+    word_or_tri_with(word, tri_fields, text, true)
+}
+
+/// Word level (OR) OR trigram (OR) — legacy saved-search semantics.
+pub fn word_or_tri_any(
+    word: Box<dyn Query>,
+    tri_fields: &[Field],
+    text: &str,
+) -> Box<dyn Query> {
+    word_or_tri_with(word, tri_fields, text, false)
+}
+
+/// A `QueryParser` for free-text filters: space-separated terms are **AND**-ed,
+/// matching how email clients behave (adding a word narrows the result rather
+/// than widening it). Terms are still OR-ed across the supplied fields, and
+/// explicit `OR`, quoted phrases and `-term` keep working.
+pub fn text_parser(index: &Index, fields: Vec<Field>) -> QueryParser {
+    let mut parser = QueryParser::for_index(index, fields);
+    parser.set_conjunction_by_default();
+    parser
+}
+
+/// The legacy `QueryParser` behaviour: space-separated terms are **OR**-ed.
+pub fn any_term_parser(index: &Index, fields: Vec<Field>) -> QueryParser {
+    QueryParser::for_index(index, fields)
 }
 
 #[cfg(test)]

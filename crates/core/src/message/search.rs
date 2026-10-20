@@ -37,6 +37,12 @@ use crate::{
 #[cfg_attr(feature = "web-api", derive(poem_openapi::Object))]
 pub struct EmailSearchFilter {
     pub text: Option<String>,
+    /// Whether every whitespace-separated term must match (`true`, the current
+    /// default) or any of them (`false`). `None` means the default. Legacy saved
+    /// searches are replayed with `false` so they keep the semantics they were
+    /// authored under.
+    #[serde(default)]
+    pub match_all: Option<bool>,
     pub subject: Option<String>,
     pub id: Option<String>,
     pub body: Option<String>,
@@ -214,6 +220,9 @@ pub fn search_messages_scoped(
 pub struct AttachmentSearchFilter {
     pub id: Option<String>,
     pub text: Option<String>,
+    /// See [`EmailSearchFilter::match_all`].
+    #[serde(default)]
+    pub match_all: Option<bool>,
     pub subject: Option<String>,
     pub from: Option<String>,
     pub since: Option<i64>,

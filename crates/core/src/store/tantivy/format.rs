@@ -36,6 +36,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::migrate::is_tantivy_index_dir;
+use crate::store::tantivy::fields::F_SUBJECT_TRI;
 
 /// Current index schema generation.
 ///
@@ -77,6 +78,31 @@ pub fn write_index_format_version(dir: &Path) -> std::io::Result<()> {
 pub fn read_index_format_version(dir: &Path) -> Option<u32> {
     let content = std::fs::read_to_string(dir.join(INDEX_FORMAT_FILE)).ok()?;
     content.trim().parse().ok()
+}
+
+/// Self-heal an index created by this binary whose marker write was lost — e.g.
+/// a crash between `Index::create_in_dir` and [`write_index_format_version`].
+///
+/// At that moment the directory has no segment files yet, so the startup gate
+/// sees `Fresh` and lets the server proceed; once mail is ingested it becomes a
+/// real tantivy index with no marker and every later start would demand a
+/// reindex. Stamping it here fixes that.
+///
+/// The marker is written **only** when the on-disk schema already proves the
+/// current format (it carries the trigram sibling field). A legacy index never
+/// has that field, so it is never stamped and still goes through the reindex
+/// gate. Returns `true` when a marker was written.
+pub fn heal_index_format_marker(dir: &Path) -> bool {
+    if read_index_format_version(dir).is_some() {
+        return false;
+    }
+    let Ok(index) = tantivy::Index::open_in_dir(dir) else {
+        return false;
+    };
+    if index.schema().get_field(F_SUBJECT_TRI).is_err() {
+        return false;
+    }
+    write_index_format_version(dir).is_ok()
 }
 
 /// Determine the format status of an index directory.
@@ -168,5 +194,38 @@ mod tests {
         let dir = temp_dir("not-an-index");
         fs::write(dir.join("random.txt"), b"hello").unwrap();
         assert_eq!(check_index_format(&dir), IndexFormatStatus::Fresh);
+    }
+
+    /// A crash between creating the index and stamping it leaves an unmarked
+    /// index. It must be healed — but only when its schema proves the current
+    /// format, never for a legacy index.
+    #[test]
+    fn heals_a_missing_marker_only_for_the_current_schema() {
+        use crate::store::tantivy::schema::SchemaTools;
+
+        // Current schema, no marker, no segment files yet → the gate sees Fresh.
+        let dir = temp_dir("heal-current");
+        let current = tantivy::Index::create_in_dir(&dir, SchemaTools::email_schema()).unwrap();
+        assert_eq!(check_index_format(&dir), IndexFormatStatus::Fresh);
+
+        assert!(heal_index_format_marker(&dir), "current-format index is healed");
+        assert_eq!(
+            read_index_format_version(&dir),
+            Some(CURRENT_INDEX_FORMAT_VERSION)
+        );
+        assert!(!heal_index_format_marker(&dir), "a second call is a no-op");
+        drop(current);
+
+        // Legacy schema: no trigram sibling field, so it must never be stamped.
+        let old_dir = temp_dir("heal-legacy");
+        let mut b = tantivy::schema::Schema::builder();
+        b.add_text_field("subject", tantivy::schema::TEXT);
+        let legacy = tantivy::Index::create_in_dir(&old_dir, b.build()).unwrap();
+        assert!(
+            !heal_index_format_marker(&old_dir),
+            "a legacy index must not be stamped as current"
+        );
+        assert_eq!(read_index_format_version(&old_dir), None);
+        drop(legacy);
     }
 }

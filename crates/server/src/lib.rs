@@ -133,15 +133,16 @@ pub async fn run() -> BichonResult<()> {
         &DATA_DIR_MANAGER.attachment_dir,
     ] {
         if check_index_format(dir) == IndexFormatStatus::NeedsUpgrade {
-            error!("Search index format is outdated; a reindex is required.");
+            error!("Search index needs a one-time rebuild to fix a known search issue.");
             rest::maintenance::serve_maintenance(
                 "Community Edition",
-                "Search index upgrade required",
+                "Search index rebuild required",
                 &[
-                    "The search indexes were built by an older version of Bichon and must be rebuilt before search works.".to_string(),
-                    "Stop the service (it is already running in maintenance mode).".to_string(),
-                    "Run `bichon-admin reindex` (Docker: `docker exec -it <bichon-container> bichon-admin reindex`).".to_string(),
-                    "Restart the service.".to_string(),
+                    "A known issue could make search miss messages that are actually present. Rebuilding the index once fixes it.".to_string(),
+                    "Run `bichon-admin reindex` (Docker: `docker exec -it <bichon-container> bichon-admin reindex`). It prints progress and can take a while on large archives.".to_string(),
+                    "If `bichon_index_dir` / `bichon_data_dir` are customized, pass `--index-parent` / `--data-parent` (or set BICHON_INDEX_DIR / BICHON_DATA_DIR).".to_string(),
+                    "Restart the service once the rebuild has finished (e.g. `docker restart <bichon-container>`).".to_string(),
+                    "Nothing is deleted: the previous indexes are kept aside until you remove them yourself.".to_string(),
                 ],
             )
             .await;

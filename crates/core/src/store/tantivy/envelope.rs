@@ -50,7 +50,10 @@ use crate::{
             },
             model::{extract_contacts, EnvelopeWithAttachments},
             schema::SchemaTools,
-            tokenizers::{tri_analyzer, word_or_tri, EuroTokenizer},
+            tokenizers::{
+                any_term_parser, text_parser, tri_analyzer, word_or_tri, word_or_tri_any,
+                EuroTokenizer,
+            },
             WriterSlot,
         },
     },
@@ -72,8 +75,8 @@ use tantivy::{
     collector::{Count, DocSetCollector, FacetCollector, TopDocs},
     indexer::{LogMergePolicy, UserOperation},
     query::{
-        AllQuery, BooleanQuery, EmptyQuery, ExistsQuery, Occur, Query, QueryParser, RangeQuery,
-        RegexQuery, TermQuery,
+        AllQuery, BooleanQuery, EmptyQuery, ExistsQuery, Occur, Query, RangeQuery, RegexQuery,
+        TermQuery,
     },
     schema::{IndexRecordOption, Value},
     DocAddress, Index, IndexReader, IndexWriter, Order, TantivyDocument, Term,
@@ -377,6 +380,13 @@ impl IndexManager {
             index
         } else {
             info!("Opening existing email index at {}", index_dir.display());
+            // Self-heal a marker lost to a crash between creating the index and
+            // stamping it. Only an index whose schema already carries the trigram
+            // sibling field is stamped; a legacy index never is, so it still hits
+            // the reindex gate.
+            if crate::store::tantivy::format::heal_index_format_marker(index_dir) {
+                tracing::warn!(dir = ?index_dir, "restored a missing INDEX_FORMAT marker");
+            }
             Self::open(&index_dir)
         }
     }
@@ -568,88 +578,101 @@ impl IndexManager {
     /// group per readable account and behaves exactly as before; a view search
     /// passes one filtered group per view source (see
     /// `crate::account::access::search_scope`).
-/// Exact, case-insensitive address match on the stored address fields.
-///
-/// `f_from` / `f_to` / `f_cc` / `f_bcc` are `STRING` fields holding one value
-/// per address, so an anchored case-insensitive regex matches exactly that
-/// address. This is deliberately *not* the full-text `any_participant` filter:
-/// that one tokenizes and stems, so `zhang@firma.de` would also match unrelated
-/// mail mentioning `firma.de` — acceptable for a convenience filter, not for
-/// an authorization boundary. `crate::account::access` compares the same way,
-/// so a hit the search returns is a message the viewer may open.
-fn participant_exact_query(
-    addresses: &[String],
-    include_sender: bool,
-) -> BichonResult<Box<dyn Query>> {
-    let f = SchemaTools::email_fields();
-    // Each address is matched against the requested address fields; addresses
-    // within one field-filter are ORed (a view may name several people or
-    // several addresses of one person). The caller ANDs the participant group
-    // with the recipient group.
-    //
-    // Blank addresses are dropped rather than compiled: the empty pattern
-    // matches *every* term, so a malformed row would turn a filter into a
-    // wildcard and offer messages the read check refuses. Creation and update
-    // reject such a value, but a row can predate that check or be written by
-    // hand, and the two sides must still agree. See
-    // `tests::view_filter_and_read_check_agree`.
-    let addresses: Vec<&String> = addresses
-        .iter()
-        .filter(|address| !address.trim().is_empty())
-        .collect();
-    if addresses.is_empty() {
-        return Ok(Self::match_nothing());
-    }
-    let mut address_queries: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(addresses.len());
-    for address in addresses {
-        let pattern = format!("(?i){}", Self::regex_escape(address.trim()));
-        let fields = if include_sender {
-            vec![f.f_from, f.f_to, f.f_cc, f.f_bcc]
-        } else {
-            vec![f.f_to, f.f_cc, f.f_bcc]
-        };
-        let mut field_queries: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(fields.len());
-        for field in fields {
-            let query = RegexQuery::from_pattern(&pattern, field)
-                .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
-            field_queries.push((Occur::Should, Box::new(query)));
+    /// Exact, case-insensitive address match on the stored address fields.
+    ///
+    /// `f_from` / `f_to` / `f_cc` / `f_bcc` are `STRING` fields holding one value
+    /// per address, so an anchored case-insensitive regex matches exactly that
+    /// address. This is deliberately *not* the full-text `any_participant` filter:
+    /// that one tokenizes and stems, so `zhang@firma.de` would also match unrelated
+    /// mail mentioning `firma.de` — acceptable for a convenience filter, not for
+    /// an authorization boundary. `crate::account::access` compares the same way,
+    /// so a hit the search returns is a message the viewer may open.
+    fn participant_exact_query(
+        addresses: &[String],
+        include_sender: bool,
+    ) -> BichonResult<Box<dyn Query>> {
+        let f = SchemaTools::email_fields();
+        // Each address is matched against the requested address fields; addresses
+        // within one field-filter are ORed (a view may name several people or
+        // several addresses of one person). The caller ANDs the participant group
+        // with the recipient group.
+        //
+        // Blank addresses are dropped rather than compiled: the empty pattern
+        // matches *every* term, so a malformed row would turn a filter into a
+        // wildcard and offer messages the read check refuses. Creation and update
+        // reject such a value, but a row can predate that check or be written by
+        // hand, and the two sides must still agree. See
+        // `tests::view_filter_and_read_check_agree`.
+        let addresses: Vec<&String> = addresses
+            .iter()
+            .filter(|address| !address.trim().is_empty())
+            .collect();
+        if addresses.is_empty() {
+            return Ok(Self::match_nothing());
         }
-        address_queries.push((
-            Occur::Should,
-            Box::new(BooleanQuery::new(field_queries)) as Box<dyn Query>,
-        ));
-    }
-    Ok(Box::new(BooleanQuery::new(address_queries)))
-}
-
-/// A query that matches nothing.
-///
-/// Used where a filter degenerates to no usable constraint: the read check
-/// refuses those messages, so the index must not offer them. `u64::MAX` is not
-/// an account id any account can have (`id!` hashes a token), and the same
-/// trick is used for an empty scope in `filter_query`.
-fn match_nothing() -> Box<dyn Query> {
-    let f = SchemaTools::email_fields();
-    Box::new(TermQuery::new(
-        Term::from_field_u64(f.f_account_id, u64::MAX),
-        IndexRecordOption::Basic,
-    ))
-}
-
-/// Escape regex metacharacters so an address is matched literally.
-fn regex_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        if matches!(
-            ch,
-            '\\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '/'
-        ) {
-            out.push('\\');
+        let mut address_queries: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(addresses.len());
+        for address in addresses {
+            let pattern = format!("(?i){}", Self::regex_escape(address.trim()));
+            let fields = if include_sender {
+                vec![f.f_from, f.f_to, f.f_cc, f.f_bcc]
+            } else {
+                vec![f.f_to, f.f_cc, f.f_bcc]
+            };
+            let mut field_queries: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(fields.len());
+            for field in fields {
+                let query = RegexQuery::from_pattern(&pattern, field)
+                    .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
+                field_queries.push((Occur::Should, Box::new(query)));
+            }
+            address_queries.push((
+                Occur::Should,
+                Box::new(BooleanQuery::new(field_queries)) as Box<dyn Query>,
+            ));
         }
-        out.push(ch);
+        Ok(Box::new(BooleanQuery::new(address_queries)))
     }
-    out
-}
+
+    /// A query that matches nothing.
+    ///
+    /// Used where a filter degenerates to no usable constraint: the read check
+    /// refuses those messages, so the index must not offer them. `u64::MAX` is not
+    /// an account id any account can have (`id!` hashes a token), and the same
+    /// trick is used for an empty scope in `filter_query`.
+    fn match_nothing() -> Box<dyn Query> {
+        let f = SchemaTools::email_fields();
+        Box::new(TermQuery::new(
+            Term::from_field_u64(f.f_account_id, u64::MAX),
+            IndexRecordOption::Basic,
+        ))
+    }
+
+    /// Escape regex metacharacters so an address is matched literally.
+    fn regex_escape(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        for ch in text.chars() {
+            if matches!(
+                ch,
+                '\\' | '.'
+                    | '^'
+                    | '$'
+                    | '*'
+                    | '+'
+                    | '?'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '|'
+                    | '/'
+            ) {
+                out.push('\\');
+            }
+            out.push(ch);
+        }
+        out
+    }
 
     /// Build the tag-presence query used by [`Self::filter_query`].
     ///
@@ -688,6 +711,15 @@ fn regex_escape(text: &str) -> String {
         let f = SchemaTools::email_fields();
         let mut subqueries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
 
+        // Default: space-separated terms are AND-ed. A legacy saved search
+        // carries `match_all: false`, restoring the OR behaviour it was authored
+        // under — for the word layer and the trigram layer alike.
+        let match_all = filter.match_all.unwrap_or(true);
+        let parse: fn(&Index, Vec<tantivy::schema::Field>) -> tantivy::query::QueryParser =
+            if match_all { text_parser } else { any_term_parser };
+        let combine: fn(Box<dyn Query>, &[tantivy::schema::Field], &str) -> Box<dyn Query> =
+            if match_all { word_or_tri } else { word_or_tri_any };
+
         if let Some(groups) = scope {
             if groups.is_empty() {
                 let term = Term::from_field_u64(f.f_account_id, u64::MAX);
@@ -722,16 +754,12 @@ fn regex_escape(text: &str) -> String {
                         Box::new(BooleanQuery::new(must)) as Box<dyn Query>,
                     ));
                 }
-                subqueries.push((
-                    Occur::Must,
-                    Box::new(BooleanQuery::new(group_queries)),
-                ));
+                subqueries.push((Occur::Must, Box::new(BooleanQuery::new(group_queries))));
             }
         }
 
         if let Some(ref text) = filter.text {
-            let query_parser =
-                QueryParser::for_index(&self.index, SchemaTools::email_default_fields());
+            let query_parser = parse(&self.index, SchemaTools::email_default_fields());
 
             let word = query_parser
                 .parse_query(text)
@@ -744,22 +772,22 @@ fn regex_escape(text: &str) -> String {
                 f.f_bcc_text_tri,
                 f.f_attachment_name_text_tri,
             ];
-            subqueries.push((Occur::Must, word_or_tri(word, &tri_fields, text)));
+            subqueries.push((Occur::Must, combine(word, &tri_fields, text)));
         }
 
         if let Some(ref subject_val) = filter.subject {
-            let query_parser = QueryParser::for_index(&self.index, vec![f.f_subject]);
+            let query_parser = parse(&self.index, vec![f.f_subject]);
             let word = query_parser
                 .parse_query(subject_val)
                 .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
             subqueries.push((
                 Occur::Must,
-                word_or_tri(word, &[f.f_subject_tri], subject_val),
+                combine(word, &[f.f_subject_tri], subject_val),
             ));
         }
 
         if let Some(ref body_val) = filter.body {
-            let query_parser = QueryParser::for_index(&self.index, vec![f.f_body]);
+            let query_parser = parse(&self.index, vec![f.f_body]);
 
             let q = query_parser
                 .parse_query(body_val)
@@ -801,11 +829,11 @@ fn regex_escape(text: &str) -> String {
             (f.f_bcc_text, f.f_bcc_text_tri, &filter.bcc),
         ] {
             if let Some(ref v) = opt_value {
-                let query_parser = QueryParser::for_index(&self.index, vec![field]);
+                let query_parser = parse(&self.index, vec![field]);
                 let word = query_parser
                     .parse_query(v)
                     .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
-                subqueries.push((Occur::Must, word_or_tri(word, &[tri_field], v)));
+                subqueries.push((Occur::Must, combine(word, &[tri_field], v)));
             }
         }
 
@@ -817,9 +845,9 @@ fn regex_escape(text: &str) -> String {
                 (f.f_cc_text, f.f_cc_text_tri),
                 (f.f_bcc_text, f.f_bcc_text_tri),
             ] {
-                let query_parser = QueryParser::for_index(&self.index, vec![field]);
+                let query_parser = parse(&self.index, vec![field]);
                 if let Ok(word) = query_parser.parse_query(v) {
-                    recipient_queries.push((Occur::Should, word_or_tri(word, &[tri_field], v)));
+                    recipient_queries.push((Occur::Should, combine(word, &[tri_field], v)));
                 }
             }
             if !recipient_queries.is_empty() {
@@ -836,9 +864,9 @@ fn regex_escape(text: &str) -> String {
                 (f.f_cc_text, f.f_cc_text_tri),
                 (f.f_bcc_text, f.f_bcc_text_tri),
             ] {
-                let query_parser = QueryParser::for_index(&self.index, vec![field]);
+                let query_parser = parse(&self.index, vec![field]);
                 if let Ok(word) = query_parser.parse_query(v) {
-                    participant_queries.push((Occur::Should, word_or_tri(word, &[tri_field], v)));
+                    participant_queries.push((Occur::Should, combine(word, &[tri_field], v)));
                 }
             }
             if !participant_queries.is_empty() {
@@ -870,8 +898,7 @@ fn regex_escape(text: &str) -> String {
                 let term = Term::from_field_text(f.f_attachment_name_exact, name);
                 let exact_query = TermQuery::new(term, IndexRecordOption::Basic);
 
-                let query_parser =
-                    QueryParser::for_index(&self.index, vec![f.f_attachment_name_text]);
+                let query_parser = parse(&self.index, vec![f.f_attachment_name_text]);
                 let word: Box<dyn Query> = query_parser
                     .parse_query(name)
                     .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
@@ -879,19 +906,18 @@ fn regex_escape(text: &str) -> String {
                     (Occur::Should, Box::new(exact_query)),
                     (
                         Occur::Should,
-                        word_or_tri(word, &[f.f_attachment_name_text_tri], name),
+                        combine(word, &[f.f_attachment_name_text_tri], name),
                     ),
                 ]);
                 subqueries.push((Occur::Must, Box::new(query)));
             } else {
-                let query_parser =
-                    QueryParser::for_index(&self.index, vec![f.f_attachment_name_text]);
+                let query_parser = parse(&self.index, vec![f.f_attachment_name_text]);
                 let word = query_parser
                     .parse_query(name)
                     .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
                 subqueries.push((
                     Occur::Must,
-                    word_or_tri(word, &[f.f_attachment_name_text_tri], name),
+                    combine(word, &[f.f_attachment_name_text_tri], name),
                 ));
             }
         }
@@ -1376,11 +1402,10 @@ fn regex_escape(text: &str) -> String {
         }
         let _write_guard = WRITE_GATE.acquire(BACKUP_ACQUIRE_TIMEOUT).await?;
 
-        let (eml_hashes_with_mailbox, attachments_content_hashes, leafs) =
-            self.collect_content_hashes_with_mailbox(self.retention_purge_query(
-                account_id,
-                cutoff_ms,
-            ))?;
+        let (eml_hashes_with_mailbox, attachments_content_hashes, leafs) = self
+            .collect_content_hashes_with_mailbox(
+                self.retention_purge_query(account_id, cutoff_ms),
+            )?;
 
         let mut writer = self.index_writer.lock().await;
         writer
@@ -1826,116 +1851,26 @@ fn regex_escape(text: &str) -> String {
                         }
                     }
 
-                    let mut new_doc = TantivyDocument::new();
-
-                    // Copy stored fields, excluding f_tags (handled separately).
-                    for (field, value) in old_doc.field_values() {
-                        if field != f_tags {
-                            new_doc.add_field_value(field, value);
-                        }
-                    }
-
-                    // Reconstruct non-stored text-search fields from their
-                    // stored counterparts. f_from_text / f_to_text / f_cc_text /
-                    // f_bcc_text carry the same content as f_from / f_to / f_cc / f_bcc.
-                    for val in old_doc.get_all(f.f_from) {
-                        if let Some(s) = val.as_str() {
-                            new_doc.add_text(f.f_from_text, s);
-                        }
-                    }
-                    for val in old_doc.get_all(f.f_to) {
-                        if let Some(s) = val.as_str() {
-                            new_doc.add_text(f.f_to_text, s);
-                        }
-                    }
-                    for val in old_doc.get_all(f.f_cc) {
-                        if let Some(s) = val.as_str() {
-                            new_doc.add_text(f.f_cc_text, s);
-                        }
-                    }
-                    for val in old_doc.get_all(f.f_bcc) {
-                        if let Some(s) = val.as_str() {
-                            new_doc.add_text(f.f_bcc_text, s);
-                        }
-                    }
-
-                    // Reconstruct attachment-name fields from the stored
-                    // f_attachments JSON blob.
-                    if let Some(attrs_val) = old_doc.get_first(f.f_attachments) {
-                        if let Some(json_str) = attrs_val.as_str() {
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str)
-                            {
-                                if let Some(arr) = parsed.as_array() {
-                                    for att in arr {
-                                        let is_inline = att
-                                            .get("inline")
-                                            .and_then(|v| v.as_bool())
-                                            .unwrap_or(false);
-                                        let has_cid = att
-                                            .get("content_id")
-                                            .and_then(|v| v.as_str())
-                                            .map(|s| !s.is_empty())
-                                            .unwrap_or(false);
-                                        if is_inline && has_cid {
-                                            continue;
-                                        }
-                                        if let Some(filename) = att
-                                            .get("filename")
-                                            .and_then(|v| v.as_str())
-                                            .filter(|s| !s.is_empty())
-                                        {
-                                            new_doc.add_text(f.f_attachment_name_text, filename);
-                                            new_doc.add_text(f.f_attachment_name_exact, filename);
-                                        }
-                                    }
-                                }
+                    let new_doc = rebuild_envelope_doc(&old_doc, current_tags, |hash| {
+                        match BLOB_MANAGER.get_email(hash) {
+                            Ok(Some(bytes)) => Some(bytes.to_vec()),
+                            Ok(None) => {
+                                tracing::warn!(
+                                    content_hash = hash,
+                                    "EML not found in blob store during tag update"
+                                );
+                                None
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    content_hash = hash,
+                                    error = %e,
+                                    "Failed to fetch EML during tag update"
+                                );
+                                None
                             }
                         }
-                    }
-
-                    // Reconstruct body text from the original EML stored in the
-                    // blob store, referenced by f_content_hash.
-                    if let Some(hash_val) = old_doc.get_first(f.f_content_hash) {
-                        if let Some(content_hash) = hash_val.as_str() {
-                            match BLOB_MANAGER.get_email(content_hash) {
-                                Ok(Some(eml_bytes)) => {
-                                    if let Some(message) = MessageParser::new().parse(&eml_bytes) {
-                                        let text = message
-                                            .body_text(0)
-                                            .map(|cow| cow.into_owned())
-                                            .or_else(|| {
-                                                message
-                                                    .body_html(0)
-                                                    .map(|cow| extract_text(cow.into_owned()))
-                                            })
-                                            .unwrap_or_default();
-                                        let body_text =
-                                            text.split_whitespace().collect::<Vec<_>>().join(" ");
-                                        if !body_text.is_empty() {
-                                            new_doc.add_text(f.f_body, &body_text);
-                                        }
-                                    }
-                                }
-                                Ok(None) => {
-                                    tracing::warn!(
-                                        content_hash,
-                                        "EML not found in blob store during tag update"
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        content_hash,
-                                        error = %e,
-                                        "Failed to fetch EML during tag update"
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    for tag in &current_tags {
-                        new_doc.add_facet(f_tags, tag);
-                    }
+                    });
 
                     let delete_term = Term::from_field_text(f_id, eid);
                     operations.push(UserOperation::Delete(delete_term));
@@ -2117,7 +2052,7 @@ fn regex_escape(text: &str) -> String {
         })
     }
 
-    fn create_searcher(&self) -> BichonResult<Searcher> {
+    pub(crate) fn create_searcher(&self) -> BichonResult<Searcher> {
         self.reader
             .reload()
             .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InternalError))?;
@@ -2431,10 +2366,126 @@ fn regex_escape(text: &str) -> String {
     }
 }
 
+/// Rebuild an envelope document from an existing one, replacing its tags.
+///
+/// `body_of` supplies the raw EML for a content hash — the live tag-update path
+/// reads it from the blob store, the regression test from an in-memory cache.
+///
+/// Every non-stored text field is re-derived here: the word-level address text,
+/// their trigram siblings, the attachment names and the body. `field_values()`
+/// only returns *stored* fields, so anything not stored would silently vanish
+/// from the rebuilt document otherwise. Shared by the live path and the test so
+/// the two cannot drift.
+fn rebuild_envelope_doc(
+    old_doc: &TantivyDocument,
+    new_tags: impl IntoIterator<Item = String>,
+    body_of: impl Fn(&str) -> Option<Vec<u8>>,
+) -> TantivyDocument {
+    let f = SchemaTools::email_fields();
+    let mut new_doc = TantivyDocument::new();
+
+    // Stored fields, except tags (re-added at the end).
+    for (field, value) in old_doc.field_values() {
+        if field != f.f_tags {
+            new_doc.add_field_value(field, value);
+        }
+    }
+
+    // Non-stored text fields: word level plus trigram siblings. `subject` is
+    // stored, but its trigram sibling is not.
+    for val in old_doc.get_all(f.f_subject) {
+        if let Some(s) = val.as_str() {
+            new_doc.add_text(f.f_subject_tri, s);
+        }
+    }
+    for val in old_doc.get_all(f.f_from) {
+        if let Some(s) = val.as_str() {
+            new_doc.add_text(f.f_from_text, s);
+            new_doc.add_text(f.f_from_text_tri, s);
+        }
+    }
+    for val in old_doc.get_all(f.f_to) {
+        if let Some(s) = val.as_str() {
+            new_doc.add_text(f.f_to_text, s);
+            new_doc.add_text(f.f_to_text_tri, s);
+        }
+    }
+    for val in old_doc.get_all(f.f_cc) {
+        if let Some(s) = val.as_str() {
+            new_doc.add_text(f.f_cc_text, s);
+            new_doc.add_text(f.f_cc_text_tri, s);
+        }
+    }
+    for val in old_doc.get_all(f.f_bcc) {
+        if let Some(s) = val.as_str() {
+            new_doc.add_text(f.f_bcc_text, s);
+            new_doc.add_text(f.f_bcc_text_tri, s);
+        }
+    }
+
+    // Attachment-name fields, rebuilt from the stored f_attachments JSON.
+    if let Some(json_str) = old_doc
+        .get_first(f.f_attachments)
+        .and_then(|v| v.as_str())
+    {
+        if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(json_str) {
+            for att in arr {
+                let is_inline = att
+                    .get("inline")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let has_cid = att
+                    .get("content_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                if is_inline && has_cid {
+                    continue;
+                }
+                if let Some(filename) = att
+                    .get("filename")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    new_doc.add_text(f.f_attachment_name_text, filename);
+                    new_doc.add_text(f.f_attachment_name_text_tri, filename);
+                    new_doc.add_text(f.f_attachment_name_exact, filename);
+                }
+            }
+        }
+    }
+
+    // Body text, re-extracted from the stored EML.
+    if let Some(content_hash) = old_doc
+        .get_first(f.f_content_hash)
+        .and_then(|v| v.as_str())
+    {
+        if let Some(eml_bytes) = body_of(content_hash) {
+            if let Some(message) = MessageParser::new().parse(&eml_bytes) {
+                let text = message
+                    .body_text(0)
+                    .map(|cow| cow.into_owned())
+                    .or_else(|| message.body_html(0).map(|cow| extract_text(cow.into_owned())))
+                    .unwrap_or_default();
+                let body_text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !body_text.is_empty() {
+                    new_doc.add_text(f.f_body, &body_text);
+                }
+            }
+        }
+    }
+
+    for tag in new_tags {
+        new_doc.add_facet(f.f_tags, &tag);
+    }
+
+    new_doc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::tantivy::tokenizers::EuroTokenizer;
+    use crate::store::tantivy::tokenizers::{tri_query, EuroTokenizer};
     use serde_json::json;
     use tantivy::{
         collector::Count,
@@ -2455,18 +2506,23 @@ mod tests {
         doc.add_u64(f.f_mailbox_id, 10);
         doc.add_u64(f.f_uid, 100);
         doc.add_text(f.f_subject, "Test Subject Line");
+        doc.add_text(f.f_subject_tri, "Test Subject Line");
         doc.add_text(f.f_body, "the quick brown fox jumps over the lazy dog");
         doc.add_text(f.f_preview, "the quick brown fox...");
         doc.add_text(f.f_content_hash, "test-content-hash-001");
-        // f_from / f_from_text carry the same data
+        // f_from / f_from_text carry the same data, and the trigram sibling mirrors them
         doc.add_text(f.f_from, "alice@example.com");
         doc.add_text(f.f_from_text, "alice@example.com");
+        doc.add_text(f.f_from_text_tri, "alice@example.com");
         doc.add_text(f.f_to, "bob@example.com");
         doc.add_text(f.f_to_text, "bob@example.com");
+        doc.add_text(f.f_to_text_tri, "bob@example.com");
         doc.add_text(f.f_cc, "carol@example.com");
         doc.add_text(f.f_cc_text, "carol@example.com");
+        doc.add_text(f.f_cc_text_tri, "carol@example.com");
         doc.add_text(f.f_bcc, "dave@example.com");
         doc.add_text(f.f_bcc_text, "dave@example.com");
+        doc.add_text(f.f_bcc_text_tri, "dave@example.com");
         doc.add_i64(f.f_date, 1_700_000_000_000);
         doc.add_i64(f.f_internal_date, 1_700_000_000_000);
         doc.add_i64(f.f_ingest_at, 1_700_000_000_000);
@@ -2485,6 +2541,7 @@ mod tests {
         }]);
         doc.add_text(f.f_attachments, atts.to_string());
         doc.add_text(f.f_attachment_name_text, "invoice.pdf");
+        doc.add_text(f.f_attachment_name_text_tri, "invoice.pdf");
         doc.add_text(f.f_attachment_name_exact, "invoice.pdf");
         doc.add_text(f.f_attachment_ext, "pdf");
         doc.add_text(f.f_attachment_category, "document");
@@ -2501,107 +2558,18 @@ mod tests {
         doc
     }
 
-    /// Reconstruct a new tantivy document from `old_doc`, preserving all
-    /// fields (including non-stored ones) and replacing tags with
-    /// `new_tags`.  Body text is reconstructed from the supplied `eml_cache`
-    /// (a stand-in for the blob store) rather than from
-    /// `old_doc.field_values()` because `f_body` is not STORED.
+    /// Drive the **production** reconstruction with an in-memory EML cache
+    /// standing in for the blob store. Deliberately a thin wrapper: the test used
+    /// to carry its own copy of the logic, and the copy silently missed the
+    /// trigram fields when they were added.
     fn reconstruct_for_test(
         old_doc: &TantivyDocument,
         new_tags: &HashSet<String>,
         eml_cache: &HashMap<String, Vec<u8>>,
     ) -> TantivyDocument {
-        let f = SchemaTools::email_fields();
-        let mut new_doc = TantivyDocument::new();
-
-        // ── stored fields (except f_tags) ──────────────────────────
-        for (field, value) in old_doc.field_values() {
-            if field != f.f_tags {
-                new_doc.add_field_value(field, value);
-            }
-        }
-
-        // ── non-stored text-search fields ──────────────────────────
-        for val in old_doc.get_all(f.f_from) {
-            if let Some(s) = val.as_str() {
-                new_doc.add_text(f.f_from_text, s);
-            }
-        }
-        for val in old_doc.get_all(f.f_to) {
-            if let Some(s) = val.as_str() {
-                new_doc.add_text(f.f_to_text, s);
-            }
-        }
-        for val in old_doc.get_all(f.f_cc) {
-            if let Some(s) = val.as_str() {
-                new_doc.add_text(f.f_cc_text, s);
-            }
-        }
-        for val in old_doc.get_all(f.f_bcc) {
-            if let Some(s) = val.as_str() {
-                new_doc.add_text(f.f_bcc_text, s);
-            }
-        }
-
-        // ── attachment-name fields ─────────────────────────────────
-        if let Some(attrs_val) = old_doc.get_first(f.f_attachments) {
-            if let Some(json_str) = attrs_val.as_str() {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    if let Some(arr) = parsed.as_array() {
-                        for att in arr {
-                            let is_inline =
-                                att.get("inline").and_then(|v| v.as_bool()).unwrap_or(false);
-                            let has_cid = att
-                                .get("content_id")
-                                .and_then(|v| v.as_str())
-                                .map(|s| !s.is_empty())
-                                .unwrap_or(false);
-                            if is_inline && has_cid {
-                                continue;
-                            }
-                            if let Some(filename) = att
-                                .get("filename")
-                                .and_then(|v| v.as_str())
-                                .filter(|s| !s.is_empty())
-                            {
-                                new_doc.add_text(f.f_attachment_name_text, filename);
-                                new_doc.add_text(f.f_attachment_name_exact, filename);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── body text (from eml cache – stands in for BLOB_MANAGER) ──
-        if let Some(hash_val) = old_doc.get_first(f.f_content_hash) {
-            if let Some(content_hash) = hash_val.as_str() {
-                if let Some(eml_bytes) = eml_cache.get(content_hash) {
-                    if let Some(message) = MessageParser::new().parse(eml_bytes) {
-                        let text = message
-                            .body_text(0)
-                            .map(|cow| cow.into_owned())
-                            .or_else(|| {
-                                message
-                                    .body_html(0)
-                                    .map(|cow| extract_text(cow.into_owned()))
-                            })
-                            .unwrap_or_default();
-                        let body_text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-                        if !body_text.is_empty() {
-                            new_doc.add_text(f.f_body, &body_text);
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── updated tags ───────────────────────────────────────────
-        for tag in new_tags {
-            new_doc.add_facet(f.f_tags, tag);
-        }
-
-        new_doc
+        rebuild_envelope_doc(old_doc, new_tags.iter().cloned(), |hash| {
+            eml_cache.get(hash).cloned()
+        })
     }
 
     #[test]
@@ -2703,6 +2671,23 @@ mod tests {
         assert_eq!(
             att_hits, 1,
             "attachment_name_exact should survive tag update"
+        );
+
+        // Trigram siblings are not stored either, so a tag update must re-derive
+        // them — otherwise fuzzy/inflectional recall silently disappears for this
+        // message. `subjec` is a partial word: the word field holds `subject`,
+        // never `subjec`, so only the trigram field can answer it.
+        let subj_tri = searcher
+            .search(&tri_query(&[f.f_subject_tri], "subjec"), &Count)
+            .unwrap();
+        assert_eq!(subj_tri, 1, "subject trigram should survive tag update");
+
+        let name_tri = searcher
+            .search(&tri_query(&[f.f_attachment_name_text_tri], "invoic"), &Count)
+            .unwrap();
+        assert_eq!(
+            name_tri, 1,
+            "attachment-name trigram should survive tag update"
         );
 
         // Updated tags
@@ -3302,13 +3287,13 @@ mod tests {
 
         // (account, date, internal_date) — see assertions below.
         let docs: Vec<(u64, i64, i64, &str)> = vec![
-            (1, old, old, "d1-old-old"),    // min old → purge
-            (1, old, new, "d2-old-new"),    // min old → purge
-            (1, new, old, "d3-new-old"),    // min old → purge
-            (1, new, new, "d4-new-new"),    // recent → keep
-            (1, 0, new, "d5-no-date"),      // effective = new → keep
-            (1, 0, old, "d6-no-date-old"),  // effective = old → purge
-            (1, 0, 0, "d7-no-timestamps"),  // unknown → keep
+            (1, old, old, "d1-old-old"),       // min old → purge
+            (1, old, new, "d2-old-new"),       // min old → purge
+            (1, new, old, "d3-new-old"),       // min old → purge
+            (1, new, new, "d4-new-new"),       // recent → keep
+            (1, 0, new, "d5-no-date"),         // effective = new → keep
+            (1, 0, old, "d6-no-date-old"),     // effective = old → purge
+            (1, 0, 0, "d7-no-timestamps"),     // unknown → keep
             (2, old, old, "d8-other-account"), // other account → keep
         ];
 
@@ -3369,15 +3354,29 @@ mod tests {
 
         assert_eq!(matched.len(), 4, "expected d1,d2,d3,d6 to match");
         for id in ["d1-old-old", "d2-old-new", "d3-new-old", "d6-no-date-old"] {
-            assert!(matched.contains(id), "{id} should be matched, got {matched:?}");
+            assert!(
+                matched.contains(id),
+                "{id} should be matched, got {matched:?}"
+            );
         }
-        for id in ["d4-new-new", "d5-no-date", "d7-no-timestamps", "d8-other-account"] {
-            assert!(!matched.contains(id), "{id} should NOT be matched, got {matched:?}");
+        for id in [
+            "d4-new-new",
+            "d5-no-date",
+            "d7-no-timestamps",
+            "d8-other-account",
+        ] {
+            assert!(
+                !matched.contains(id),
+                "{id} should NOT be matched, got {matched:?}"
+            );
         }
     }
 
     #[tokio::test]
     async fn update_envelope_tags_guard_fires_for_held_account() {
+        // This test writes the process-global envelope index; serialize with the
+        // other modules that do too (see `crate::test_support`).
+        let _global = crate::test_support::GLOBAL_INDEX_LOCK.lock().await;
         // The account insert and tag update write through the backup write
         // gate, which backup tests pause during their capture window;
         // serialize against them via the shared state-test lock (see the
@@ -3395,10 +3394,8 @@ mod tests {
 
         static TEST_ENV: Once = Once::new();
         TEST_ENV.call_once(|| {
-            let root = std::env::temp_dir().join(format!(
-                "bichon-core-test-{}",
-                std::process::id()
-            ));
+            let root =
+                std::env::temp_dir().join(format!("bichon-core-test-{}", std::process::id()));
             std::fs::create_dir_all(&root).unwrap();
             std::env::set_var("BICHON_ROOT_DIR", &root);
             std::env::set_var("BICHON_ENCRYPT_PASSWORD", "test-password");
@@ -3451,7 +3448,10 @@ mod tests {
 
         // Under a hold: refused with Forbidden before touching the index.
         AccountModel::place_legal_hold(account.id, 7, Some("freeze".into())).unwrap();
-        let err = ENVELOPE_MANAGER.update_envelope_tags(req).await.unwrap_err();
+        let err = ENVELOPE_MANAGER
+            .update_envelope_tags(req)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), ErrorCode::Forbidden);
     }
 
@@ -3604,7 +3604,11 @@ mod tests {
             // Matches only through the second address in the multi-address
             // filter below.
             writer
-                .add_document(doc("second-address", "x@elsewhere.example", "other@example.com"))
+                .add_document(doc(
+                    "second-address",
+                    "x@elsewhere.example",
+                    "other@example.com",
+                ))
                 .unwrap();
             writer.commit().unwrap();
         }
@@ -3613,14 +3617,16 @@ mod tests {
         reader.reload().unwrap();
         let searcher = reader.searcher();
 
-        let recipients = IndexManager::participant_exact_query(&["zhang@firma.de".to_string()], false).unwrap();
+        let recipients =
+            IndexManager::participant_exact_query(&["zhang@firma.de".to_string()], false).unwrap();
         assert_eq!(
             searcher.search(&recipients, &Count).unwrap(),
             1,
             "recipient filter must match exactly the message addressed to the person"
         );
 
-        let participants = IndexManager::participant_exact_query(&["ZHANG@FIRMA.DE".to_string()], true).unwrap();
+        let participants =
+            IndexManager::participant_exact_query(&["ZHANG@FIRMA.DE".to_string()], true).unwrap();
         assert_eq!(
             searcher.search(&participants, &Count).unwrap(),
             2,
@@ -3628,13 +3634,17 @@ mod tests {
         );
 
         // A bare domain is not an address and must match nothing.
-        let domain_only = IndexManager::participant_exact_query(&["firma.de".to_string()], true).unwrap();
+        let domain_only =
+            IndexManager::participant_exact_query(&["firma.de".to_string()], true).unwrap();
         assert_eq!(searcher.search(&domain_only, &Count).unwrap(), 0);
 
         // Several addresses are ORed within the field: a view over a team (or
         // a person with two addresses) matches every named participant.
         let two_people = IndexManager::participant_exact_query(
-            &["zhang@firma.de".to_string(), "other@example.com".to_string()],
+            &[
+                "zhang@firma.de".to_string(),
+                "other@example.com".to_string(),
+            ],
             true,
         )
         .unwrap();
@@ -3674,7 +3684,11 @@ mod tests {
                 .add_document(doc("umlaut-sender", "JÜRGEN@firma.de", "other@example.com"))
                 .unwrap();
             writer
-                .add_document(doc("umlaut-recipient", "someone@firma.de", "info@MÜNCHEN.de"))
+                .add_document(doc(
+                    "umlaut-recipient",
+                    "someone@firma.de",
+                    "info@MÜNCHEN.de",
+                ))
                 .unwrap();
             writer.commit().unwrap();
         }
@@ -3683,18 +3697,21 @@ mod tests {
         reader.reload().unwrap();
         let searcher = reader.searcher();
 
-        let sender = IndexManager::participant_exact_query(&["jürgen@firma.de".to_string()], true).unwrap();
+        let sender =
+            IndexManager::participant_exact_query(&["jürgen@firma.de".to_string()], true).unwrap();
         assert_eq!(
             searcher.search(&sender, &Count).unwrap(),
             1,
             "the index must fold non-ASCII case, or the read check cannot agree with it"
         );
 
-        let recipient = IndexManager::participant_exact_query(&["info@münchen.de".to_string()], false).unwrap();
+        let recipient =
+            IndexManager::participant_exact_query(&["info@münchen.de".to_string()], false).unwrap();
         assert_eq!(searcher.search(&recipient, &Count).unwrap(), 1);
 
         // Folding must not become a substring match.
-        let partial = IndexManager::participant_exact_query(&["ürgen@firma.de".to_string()], true).unwrap();
+        let partial =
+            IndexManager::participant_exact_query(&["ürgen@firma.de".to_string()], true).unwrap();
         assert_eq!(searcher.search(&partial, &Count).unwrap(), 0);
     }
 
@@ -3723,7 +3740,12 @@ mod tests {
             ("JÜRGEN@firma.de", "other@example.com", "", ""),
             ("someone@firma.de", "info@MÜNCHEN.de", "", ""),
             ("not-zhang@firma.de", "other@example.com", "", ""),
-            ("other@example.com", "zhang@firma.de", "cc@firma.de", "bcc@firma.de"),
+            (
+                "other@example.com",
+                "zhang@firma.de",
+                "cc@firma.de",
+                "bcc@firma.de",
+            ),
             ("other@example.com", "", "", ""),
         ];
         // Filters a view can carry, plus the values that must match nothing.
@@ -3786,9 +3808,11 @@ mod tests {
 
             for filter in filters {
                 for include_sender in [true, false] {
-                    let address_query =
-                        IndexManager::participant_exact_query(&[filter.to_string()], include_sender)
-                            .unwrap();
+                    let address_query = IndexManager::participant_exact_query(
+                        &[filter.to_string()],
+                        include_sender,
+                    )
+                    .unwrap();
                     let id_query = TermQuery::new(
                         Term::from_field_text(f.f_id, &format!("doc{i}")),
                         IndexRecordOption::Basic,
@@ -3963,7 +3987,8 @@ mod tests {
 mod search_fix_tests {
     use super::*;
     use crate::store::tantivy::tokenizers::{
-        tri_analyzer, tri_query, word_or_tri, EuroTokenizer,
+        any_term_parser, text_parser, tri_analyzer, tri_query, tri_query_any, word_or_tri,
+        EuroTokenizer,
     };
     use tantivy::{collector::Count, query::QueryParser, Index};
 
@@ -3982,6 +4007,27 @@ mod search_fix_tests {
                 d.add_text(f.f_subject, *subject);
                 d.add_text(f.f_subject_tri, *subject);
                 d.add_text(f.f_body, *body);
+                writer.add_document(d).unwrap();
+            }
+            writer.commit().unwrap();
+        }
+        index
+    }
+
+    /// Build an in-memory index whose documents carry only an attachment name
+    /// (id = the name, so assertions read the name back).
+    fn build_index_with_names(names: &[&str]) -> Index {
+        let index = Index::create_in_ram(SchemaTools::email_schema());
+        index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
+        let f = SchemaTools::email_fields();
+        {
+            let mut writer = index.writer_with_num_threads(1, 15_000_000).unwrap();
+            for name in names {
+                let mut d = TantivyDocument::new();
+                d.add_text(f.f_id, *name);
+                d.add_text(f.f_attachment_name_text, *name);
+                d.add_text(f.f_attachment_name_text_tri, *name);
                 writer.add_document(d).unwrap();
             }
             writer.commit().unwrap();
@@ -4068,6 +4114,78 @@ mod search_fix_tests {
         );
     }
 
+    /// Space-separated terms are AND-ed, the way email clients behave: adding a
+    /// word narrows the result instead of widening it. Explicit `OR` still works.
+    #[test]
+    fn multiword_query_is_and() {
+        let index = build_index(&[
+            ("both", "alert for rustmailer git"),
+            ("only alert", "alert only"),
+        ]);
+        let f = SchemaTools::email_fields();
+
+        let word = |term: &str| {
+            matching_ids(
+                &index,
+                text_parser(&index, vec![f.f_body])
+                    .parse_query(term)
+                    .unwrap()
+                    .as_ref(),
+            )
+        };
+
+        // A single term matches both documents.
+        assert_eq!(word("alert"), ["both", "only alert"]);
+
+        // A second term narrows it to the one that has both — under OR this
+        // would still return both.
+        assert_eq!(word("alert rustmailer"), ["both"]);
+
+        // Explicit OR is still honoured.
+        assert_eq!(word("rustmailer OR alert"), ["both", "only alert"]);
+
+        // A quoted phrase still requires adjacency (the default conjunction does
+        // not turn it into "both words anywhere").
+        assert_eq!(word("\"alert for\""), ["both"]);
+
+        // Explicit exclusion still works.
+        assert_eq!(word("alert -rustmailer"), ["only alert"]);
+    }
+
+    /// The legacy mode (`match_all: false`, used when replaying saved searches
+    /// authored before the switch) still ORs terms, at both layers.
+    #[test]
+    fn legacy_or_mode_still_works() {
+        let index = build_index(&[
+            ("both", "alert for rustmailer git"),
+            ("only alert", "alert only"),
+        ]);
+        let f = SchemaTools::email_fields();
+
+        // Word layer: OR matches documents that contain either term.
+        let word = matching_ids(
+            &index,
+            any_term_parser(&index, vec![f.f_body])
+                .parse_query("alert rustmailer")
+                .unwrap()
+                .as_ref(),
+        );
+        assert_eq!(word, ["both", "only alert"]);
+
+        // Trigram layer: AND finds nothing (no subject has both terms), OR finds
+        // each document through one term.
+        let subj_tri = [f.f_subject_tri];
+        assert!(
+            matching_ids(&index, tri_query(&subj_tri, "both alert").as_ref()).is_empty(),
+            "AND: no document carries both terms"
+        );
+        assert_eq!(
+            matching_ids(&index, tri_query_any(&subj_tri, "both alert").as_ref()),
+            ["both", "only alert"],
+            "OR: each document matches through one term"
+        );
+    }
+
     /// Morphology coverage across Nordic and Southern-European languages, plus
     /// the short-term precision boundary of the trigram layer.
     ///
@@ -4108,7 +4226,11 @@ mod search_fix_tests {
 
         // ── exact word level, accent-insensitive ──
         assert_eq!(word("Kroatien"), ["Sejlerferie i Kroatien"]);
-        assert_eq!(word("cafe"), ["café con leche"], "deunicode folds the accent");
+        assert_eq!(
+            word("cafe"),
+            ["café con leche"],
+            "deunicode folds the accent"
+        );
         assert_eq!(word("Haus"), ["Haus am See"]);
 
         // ── trigram recovers one level of morphology ──
@@ -4125,7 +4247,11 @@ mod search_fix_tests {
         // Two grams means no leave-one-out variant, so both grams are required —
         // i.e. an exact 4-character substring.
         assert_eq!(tri("haus"), ["Haus am See"], "must not drag in Mauser");
-        assert_eq!(tri("Haus"), ["Haus am See"], "case-insensitive, same result");
+        assert_eq!(
+            tri("Haus"),
+            ["Haus am See"],
+            "case-insensitive, same result"
+        );
 
         // ── a 3-character term is a single gram = pure substring match ──
         assert_eq!(
@@ -4133,6 +4259,42 @@ mod search_fix_tests {
             ["Haus am See", "Mauser Gewehr"],
             "intended substring semantics for 3-char terms"
         );
+    }
+
+    /// Attachment-name recall.
+    ///
+    /// Filenames mix case, underscores, digits and brackets, so a query is rarely
+    /// the exact token stored for the name — the word field holds the split
+    /// tokens (`invoice`, `2024`, `final`, `pdf`), never the typed run
+    /// `invoice_2024`. The trigram layer on the name field is what bridges that.
+    #[test]
+    fn attachment_name_trigram_recall() {
+        let index = build_index_with_names(&[
+            "Invoice_2024_final.pdf",
+            "Rechnung(2024).pdf",
+            "report.docx",
+        ]);
+        let f = SchemaTools::email_fields();
+        let tri = |term: &str| {
+            matching_ids(
+                &index,
+                tri_query(&[f.f_attachment_name_text_tri], term).as_ref(),
+            )
+        };
+
+        // A partial word inside the name still finds it: the word field holds
+        // `invoice`, never `invoic`.
+        assert_eq!(tri("invoic"), ["Invoice_2024_final.pdf"]);
+
+        // The 4-character boundary: `orts` shares only the `ort` gram with
+        // `report`, and must not match on that single gram.
+        assert!(
+            tri("orts").is_empty(),
+            "a 4-char term must not match on one shared gram"
+        );
+
+        // An exact 4-character substring does match.
+        assert_eq!(tri("rech"), ["Rechnung(2024).pdf"]);
     }
 
     /// §8.3 trigram threshold: tolerate one level of inflection, reject noise

@@ -108,8 +108,9 @@ pub struct ReindexArgs {
     pub force: bool,
 
     /// NDJSON file recording every document that could not be carried over
-    /// (default: `<root>/reindex-skipped.ndjson`).
-    #[clap(long, help = "NDJSON file for skipped/degraded documents (default: <root>/reindex-skipped.ndjson)")]
+    /// (default: `<root>/reindex-skipped.ndjson`). It contains plain-text
+    /// message metadata, so treat it like the archive itself.
+    #[clap(long, help = "NDJSON file for skipped/degraded documents; contains plain-text message metadata (default: <root>/reindex-skipped.ndjson)")]
     pub report: Option<String>,
 }
 
@@ -157,6 +158,28 @@ fn run(args: ReindexArgs) -> BichonResult<i32> {
     execute(&root, &dirs, &args, true)
 }
 
+/// Run the reindex **without** its own confirmation prompt — for callers that
+/// have already asked the user, such as the v1.x migration. The plan is still
+/// printed; only the "Proceed?" question is skipped. Returns the process code.
+pub fn run_without_confirm(args: ReindexArgs) -> i32 {
+    let theme = ColorfulTheme::default();
+    let result = resolve_root(&args, &theme).and_then(|root| {
+        let dirs = resolve_dirs(
+            &root,
+            args.index_parent.as_deref().map(Path::new),
+            args.data_parent.as_deref().map(Path::new),
+        );
+        execute(&root, &dirs, &args, false)
+    });
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("\n{} {e:?}", style("ERROR:").red().bold());
+            1
+        }
+    }
+}
+
 /// Non-interactive body (pre-checks → both phases → swap → report).
 /// `confirm=false` lets tests drive it directly.
 fn execute(
@@ -172,19 +195,34 @@ fn execute(
     let attach_ok = is_tantivy_index_dir(&dirs.attachment_dir).unwrap_or(false);
     if !email_ok && !attach_ok {
         println!(
-            "{} No index found to rebuild (fresh install?), nothing to reindex.",
-            style("·").dim()
+            "{} No index found under {} — nothing to reindex.",
+            style("·").dim(),
+            dirs.index_root.display()
         );
+        if args.index_parent.is_none() {
+            println!(
+                "{}",
+                style("If this deployment uses a custom index directory (`bichon_index_dir` / BICHON_INDEX_DIR), pass it as --index-parent.").dim()
+            );
+        }
         return Ok(0);
     }
 
     // ── Pre-check 2: storage version ──
     match read_storage_version(root) {
         Some(v) if v >= 2 => {}
-        _ => {
+        Some(_) => {
             eprintln!(
                 "{} Storage is not on the v2 layout yet; run `bichon-admin` to migrate first.",
                 style("ERROR:").red().bold()
+            );
+            return Ok(1);
+        }
+        None => {
+            eprintln!(
+                "{} {} does not look like a bichon data root (no STORAGE_VERSION). Check --root.",
+                style("ERROR:").red().bold(),
+                root.display()
             );
             return Ok(1);
         }
@@ -290,7 +328,7 @@ fn execute(
     );
     println!(
         "{}",
-        style("The service must stay stopped during the rebuild (the blob lock is held).").yellow()
+        style("Do not restart the service until the rebuild finishes — it holds the data lock.").yellow()
     );
     if confirm
         && !Confirm::with_theme(&ColorfulTheme::default())
@@ -545,12 +583,10 @@ fn validate_root(path: &Path) -> BichonResult<()> {
     if !path.exists() {
         return Err(raise_error!("Directory does not exist.".into(), ErrorCode::InvalidParameter));
     }
-    if !path.join("bichon-indices").exists() {
-        return Err(raise_error!(
-            "Invalid directory: 'bichon-indices' not found.".into(),
-            ErrorCode::InvalidParameter
-        ));
-    }
+    // Deliberately no `bichon-indices` check here: the index directory may live
+    // elsewhere (`bichon_index_dir` / `--index-parent`), in which case nothing
+    // index-related exists under the root. The resolved index root is checked in
+    // the pre-checks instead.
     Ok(())
 }
 
@@ -1238,7 +1274,7 @@ impl SkipReport {
 
     fn record(&mut self, value: serde_json::Value) {
         if self.file.is_none() {
-            match std::fs::File::create(&self.path) {
+            match create_private_report_file(&self.path) {
                 Ok(f) => self.file = Some(f),
                 Err(e) => {
                     warn!(error = %e, path = %self.path.display(), "cannot create reindex skip report");
@@ -1253,6 +1289,20 @@ impl SkipReport {
             }
         }
     }
+}
+
+/// Create the report file with owner-only permissions where the platform
+/// supports it: the report carries plain-text subjects, addresses and message
+/// ids, so it should not be world-readable.
+fn create_private_report_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
 }
 
 fn skip_record(
@@ -1943,5 +1993,36 @@ mod tests {
         // Run again: already current, exits 0, and leaves no temp build dir
         assert_eq!(execute(&root, &dirs, &args, false).unwrap(), 0);
         assert!(!sibling(&dirs.index_root, NEW_SUFFIX).exists());
+    }
+
+    /// A deployment can put the index tree outside the data root
+    /// (`bichon_index_dir` / `--index-parent`). The root must still validate
+    /// even though it holds no `bichon-indices`, and the resolved directories
+    /// must follow the custom parent.
+    #[test]
+    fn custom_index_parent_is_honoured() {
+        let root = temp_root("custom-index-root");
+        write_storage_version(&root, 2).unwrap();
+        assert!(
+            !root.join("bichon-indices").exists(),
+            "fixture must not have an index under the root"
+        );
+
+        // This used to be rejected outright, before `--index-parent` was even
+        // taken into account.
+        validate_root(&root).expect("a root without bichon-indices must still be valid");
+
+        let index_parent = temp_root("custom-index-parent");
+        let dirs = resolve_dirs(&root, Some(&index_parent), None);
+        assert_eq!(
+            dirs.envelope_dir,
+            index_parent.join("bichon-indices").join("mail_metadata")
+        );
+        assert_eq!(
+            dirs.attachment_dir,
+            index_parent.join("bichon-indices").join("attachment_metadata")
+        );
+        // The blob store still comes from the root when no data parent is given.
+        assert_eq!(dirs.blobs_dir, root.join("bichon-storage").join("blobs"));
     }
 }

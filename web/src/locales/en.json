@@ -2280,6 +2280,7 @@
     "body": "Body",
     "button": "Search",
     "clear_history": "Clear history",
+    "hint": "All words must match. Use OR to widen, \"quotes\" for a phrase, -word to exclude.",
     "no_history": "No search history",
     "placeholder": "Search emails (use \" \" for phrase search)",
     "recent_title": "Recent searches",

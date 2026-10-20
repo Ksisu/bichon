@@ -2280,6 +2280,7 @@
     "body": "邮件正文",
     "button": "搜索",
     "clear_history": "清空记录",
+    "hint": "多个词需同时匹配。用 OR 放宽，用“引号”匹配短语，-词 排除。",
     "no_history": "暂无搜索记录",
     "placeholder": "搜索邮件（使用 \" \" 进行短语搜索）",
     "recent_title": "最近搜索",
