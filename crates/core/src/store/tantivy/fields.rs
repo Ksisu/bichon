@@ -38,6 +38,16 @@ pub const F_TO_TEXT: &str = "to_text";
 pub const F_CC_TEXT: &str = "cc_text";
 pub const F_BCC_TEXT: &str = "bcc_text";
 
+// Trigram sibling fields (tokenizer "tri"). Only the small fields get a trigram
+// sibling; bodies (f_body / attachment f_text) deliberately do not.
+pub const F_SUBJECT_TRI: &str = "subject_tri";
+pub const F_FROM_TEXT_TRI: &str = "from_text_tri";
+pub const F_TO_TEXT_TRI: &str = "to_text_tri";
+pub const F_CC_TEXT_TRI: &str = "cc_text_tri";
+pub const F_BCC_TEXT_TRI: &str = "bcc_text_tri";
+pub const F_ATTACHMENT_NAME_TEXT_TRI: &str = "attachment_name_text_tri";
+pub const F_NAME_TEXT_TRI: &str = "name_text_tri";
+
 pub const F_DATE: &str = "date";
 pub const F_INTERNAL_DATE: &str = "internal_date";
 pub const F_INGEST_AT: &str = "ingest_at";
@@ -84,6 +94,11 @@ pub struct EmailFields {
     pub f_to_text: Field,
     pub f_cc_text: Field,
     pub f_bcc_text: Field,
+    pub f_subject_tri: Field,
+    pub f_from_text_tri: Field,
+    pub f_to_text_tri: Field,
+    pub f_cc_text_tri: Field,
+    pub f_bcc_text_tri: Field,
     pub f_date: Field,
     pub f_internal_date: Field,
     pub f_ingest_at: Field,
@@ -93,6 +108,7 @@ pub struct EmailFields {
     pub f_regular_attachment_count: Field,
     pub f_attachments: Field,
     pub f_attachment_name_text: Field,
+    pub f_attachment_name_text_tri: Field,
     pub f_attachment_name_exact: Field,
     pub f_attachment_content_hash: Field,
     pub f_attachment_ext: Field,
@@ -109,7 +125,9 @@ pub struct AttachmentFields {
     pub f_mailbox_id: Field,
     pub f_from: Field,
     pub f_from_text: Field,
+    pub f_from_text_tri: Field,
     pub f_subject: Field,
+    pub f_subject_tri: Field,
     pub f_content_hash: Field,
     pub f_text: Field,
     pub f_has_text: Field,
@@ -121,6 +139,7 @@ pub struct AttachmentFields {
     pub f_size: Field,
     pub f_is_message: Field,
     pub f_name_text: Field,  // TEXT
+    pub f_name_text_tri: Field,
     pub f_name_exact: Field, // STRING
     pub f_ext: Field,
     pub f_category: Field,

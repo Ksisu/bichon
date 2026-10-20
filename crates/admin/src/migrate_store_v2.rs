@@ -4,7 +4,7 @@ use bytes::Bytes;
 
 use bichon_core::{
     envelope::extractor::extract_references, message::content::AttachmentInfo,
-    store::tantivy::tokenizers::EuroTokenizer, utils::compute_content_hash,
+    store::tantivy::tokenizers::{tri_analyzer, EuroTokenizer}, utils::compute_content_hash,
 };
 
 use bichon_blob::{Codec, Config, Engine};
@@ -97,6 +97,8 @@ pub struct NewIndexWriterV2 {
     pub envelope_writer: Option<IndexWriter>,
     pub attachment_writer: Option<IndexWriter>,
     pub engine: Engine,
+    envelope_dir: PathBuf,
+    attachment_dir: PathBuf,
     pending: usize,
     email_buf: Vec<([u8; 32], Vec<u8>)>,
     attachment_buf: Vec<([u8; 32], Vec<u8>)>,
@@ -123,6 +125,9 @@ impl NewIndexWriterV2 {
         envelope_index
             .tokenizers()
             .register("euro", EuroTokenizer::new());
+        envelope_index
+            .tokenizers()
+            .register("tri", tri_analyzer());
 
         let envelope_writer = envelope_index
             .writer_with_num_threads(3, 256 * 1024 * 1024)
@@ -148,6 +153,9 @@ impl NewIndexWriterV2 {
         attachment_index
             .tokenizers()
             .register("euro", EuroTokenizer::new());
+        attachment_index
+            .tokenizers()
+            .register("tri", tri_analyzer());
         let attachment_writer = attachment_index
             .writer_with_num_threads(3, 256 * 1024 * 1024)
             .map_err(|e| raise_error!(format!("{e:#?}"), ErrorCode::InternalError))?;
@@ -172,6 +180,8 @@ impl NewIndexWriterV2 {
             envelope_writer: Some(envelope_writer),
             attachment_writer: Some(attachment_writer),
             engine,
+            envelope_dir: dirs.envelope_dir,
+            attachment_dir: dirs.attachment_dir,
             pending: 0,
             email_buf: Vec::new(),
             attachment_buf: Vec::new(),
@@ -406,6 +416,15 @@ impl NewIndexWriterV2 {
                 let start = std::time::Instant::now();
                 let _ = writer.wait_merging_threads();
                 println!("{} merge done: {:#?}", name, start.elapsed());
+            }
+        }
+
+        // Migration builds the indexes with the current binary, so stamp the
+        // current index format version (otherwise the server would treat the
+        // freshly built indexes as legacy on startup).
+        for dir in [&self.envelope_dir, &self.attachment_dir] {
+            if let Err(e) = bichon_core::store::tantivy::format::write_index_format_version(dir) {
+                tracing::warn!(error = %e, "failed to write INDEX_FORMAT marker for {:?}", dir);
             }
         }
 

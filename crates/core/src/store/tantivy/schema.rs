@@ -25,11 +25,13 @@ use tantivy::schema::{Schema, FAST, STORED, STRING};
 use crate::store::tantivy::fields::{
     AttachmentFields, EmailFields, F_ACCOUNT_ID, F_ATTACHMENTS, F_ATTACHMENT_CATEGORY,
     F_ATTACHMENT_CONTENT_HASH, F_ATTACHMENT_CONTENT_TYPE, F_ATTACHMENT_COUNT, F_ATTACHMENT_EXT,
-    F_ATTACHMENT_NAME_EXACT, F_ATTACHMENT_NAME_TEXT, F_AUTO_TAGS, F_BCC, F_BCC_TEXT, F_BODY, F_CC,
-    F_CC_TEXT, F_CONTENT_HASH, F_DATE, F_ENVELOPE_ID, F_FROM, F_FROM_TEXT, F_HAS_TEXT, F_ID,
-    F_INGEST_AT, F_INTERNAL_DATE, F_IS_INDEXED, F_IS_MESSAGE, F_IS_OCR, F_MAILBOX_ID, F_MESSAGE_ID,
-    F_NAME_EXACT, F_NAME_TEXT, F_PAGE_COUNT, F_PREVIEW, F_REGULAR_ATTACHMENT_COUNT, F_SHARD_ID,
-    F_SIZE, F_SUBJECT, F_TAGS, F_TEXT, F_THREAD_ID, F_TO, F_TO_TEXT, F_UID,
+    F_ATTACHMENT_NAME_EXACT, F_ATTACHMENT_NAME_TEXT, F_ATTACHMENT_NAME_TEXT_TRI, F_AUTO_TAGS,
+    F_BCC, F_BCC_TEXT, F_BCC_TEXT_TRI, F_BODY, F_CC, F_CC_TEXT, F_CC_TEXT_TRI, F_CONTENT_HASH,
+    F_DATE, F_ENVELOPE_ID, F_FROM, F_FROM_TEXT, F_FROM_TEXT_TRI, F_HAS_TEXT, F_ID, F_INGEST_AT,
+    F_INTERNAL_DATE, F_IS_INDEXED, F_IS_MESSAGE, F_IS_OCR, F_MAILBOX_ID, F_MESSAGE_ID, F_NAME_EXACT,
+    F_NAME_TEXT, F_NAME_TEXT_TRI, F_PAGE_COUNT, F_PREVIEW, F_REGULAR_ATTACHMENT_COUNT, F_SHARD_ID,
+    F_SIZE, F_SUBJECT, F_SUBJECT_TRI, F_TAGS, F_TEXT, F_THREAD_ID, F_TO, F_TO_TEXT, F_TO_TEXT_TRI,
+    F_UID,
 };
 
 // ─── Lazy Globals ─────────────────────────────────────────────────────────────
@@ -109,6 +111,11 @@ impl EmailSchema {
         let f_to_text = b.add_text_field(F_TO_TEXT, text_no_store("euro"));
         let f_cc_text = b.add_text_field(F_CC_TEXT, text_no_store("euro"));
         let f_bcc_text = b.add_text_field(F_BCC_TEXT, text_no_store("euro"));
+        let f_subject_tri = b.add_text_field(F_SUBJECT_TRI, text_no_store("tri"));
+        let f_from_text_tri = b.add_text_field(F_FROM_TEXT_TRI, text_no_store("tri"));
+        let f_to_text_tri = b.add_text_field(F_TO_TEXT_TRI, text_no_store("tri"));
+        let f_cc_text_tri = b.add_text_field(F_CC_TEXT_TRI, text_no_store("tri"));
+        let f_bcc_text_tri = b.add_text_field(F_BCC_TEXT_TRI, text_no_store("tri"));
         let f_date = b.add_i64_field(F_DATE, INDEXED | STORED | FAST);
         let f_internal_date = b.add_i64_field(F_INTERNAL_DATE, INDEXED | STORED | FAST);
         let f_ingest_at = b.add_i64_field(F_INGEST_AT, INDEXED | STORED | FAST);
@@ -119,6 +126,8 @@ impl EmailSchema {
             b.add_u64_field(F_REGULAR_ATTACHMENT_COUNT, INDEXED | STORED | FAST);
         let f_attachment_name_text =
             b.add_text_field(F_ATTACHMENT_NAME_TEXT, text_no_store("euro"));
+        let f_attachment_name_text_tri =
+            b.add_text_field(F_ATTACHMENT_NAME_TEXT_TRI, text_no_store("tri"));
         let f_attachment_name_exact = b.add_text_field(F_ATTACHMENT_NAME_EXACT, STRING);
         let f_attachments = b.add_text_field(F_ATTACHMENTS, STORED);
         let f_attachment_content_hash =
@@ -148,6 +157,11 @@ impl EmailSchema {
             f_to_text,
             f_cc_text,
             f_bcc_text,
+            f_subject_tri,
+            f_from_text_tri,
+            f_to_text_tri,
+            f_cc_text_tri,
+            f_bcc_text_tri,
             f_date,
             f_internal_date,
             f_ingest_at,
@@ -157,6 +171,7 @@ impl EmailSchema {
             f_regular_attachment_count,
             f_attachments,
             f_attachment_name_text,
+            f_attachment_name_text_tri,
             f_attachment_name_exact,
             f_attachment_content_hash,
             f_attachment_ext,
@@ -185,9 +200,11 @@ impl AttachmentSchema {
         let f_account_id = b.add_u64_field(F_ACCOUNT_ID, INDEXED | STORED | FAST);
         let f_mailbox_id = b.add_u64_field(F_MAILBOX_ID, INDEXED | STORED | FAST);
         let f_subject = b.add_text_field(F_SUBJECT, text_store("euro"));
+        let f_subject_tri = b.add_text_field(F_SUBJECT_TRI, text_no_store("tri"));
         let f_content_hash = b.add_text_field(F_CONTENT_HASH, STRING | STORED | FAST);
         let f_from = b.add_text_field(F_FROM, STRING | STORED | FAST);
         let f_from_text = b.add_text_field(F_FROM_TEXT, text_no_store("euro"));
+        let f_from_text_tri = b.add_text_field(F_FROM_TEXT_TRI, text_no_store("tri"));
         let f_date = b.add_i64_field(F_DATE, INDEXED | STORED | FAST);
         let f_ingest_at = b.add_i64_field(F_INGEST_AT, INDEXED | STORED | FAST);
         let f_size = b.add_u64_field(F_SIZE, INDEXED | STORED | FAST);
@@ -202,6 +219,7 @@ impl AttachmentSchema {
         let f_is_indexed = b.add_bool_field(F_IS_INDEXED, INDEXED | STORED | FAST);
         let f_is_message = b.add_bool_field(F_IS_MESSAGE, INDEXED | STORED | FAST);
         let f_name_text = b.add_text_field(F_NAME_TEXT, text_no_store("euro"));
+        let f_name_text_tri = b.add_text_field(F_NAME_TEXT_TRI, text_no_store("tri"));
         let f_name_exact = b.add_text_field(F_NAME_EXACT, STRING | STORED);
         let f_tags = b.add_facet_field(F_TAGS, FacetOptions::default().set_stored());
         let f_auto_tags = b.add_facet_field(F_AUTO_TAGS, FacetOptions::default().set_stored());
@@ -212,9 +230,11 @@ impl AttachmentSchema {
             f_account_id,
             f_mailbox_id,
             f_subject,
+            f_subject_tri,
             f_content_hash,
             f_from,
             f_from_text,
+            f_from_text_tri,
             f_date,
             f_ingest_at,
             f_size,
@@ -229,6 +249,7 @@ impl AttachmentSchema {
             f_is_indexed,
             f_is_message,
             f_name_text,
+            f_name_text_tri,
             f_name_exact,
             f_tags,
             f_auto_tags,

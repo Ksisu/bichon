@@ -36,10 +36,17 @@ use bichon_core::{
     logger,
     migrate::check_data_status,
     raise_error,
-    settings::{cli::SETTINGS, dir::DataDirManager},
+    settings::{
+        cli::SETTINGS,
+        dir::{DataDirManager, DATA_DIR_MANAGER},
+    },
     store::{
         blob::BLOB_MANAGER,
-        tantivy::{attachment::ATTACHMENT_MANAGER, envelope::ENVELOPE_MANAGER},
+        tantivy::{
+            attachment::ATTACHMENT_MANAGER,
+            envelope::ENVELOPE_MANAGER,
+            format::{check_index_format, IndexFormatStatus},
+        },
     },
     tasks::PeriodicTasks,
     users::manager::UserManager,
@@ -114,6 +121,32 @@ pub async fn run() -> BichonResult<()> {
             return Ok(());
         }
         Ok(true) => {}
+    }
+
+    // Search index format gate: a legacy index (no INDEX_FORMAT marker) is
+    // intercepted here with a maintenance page instead of silently serving
+    // searches against terms the new tokenizer can no longer match. A fresh
+    // install reports Fresh and never trips this. Must run before
+    // initialize(), which opens the ENVELOPE/ATTACHMENT/BLOB managers.
+    for dir in [
+        &DATA_DIR_MANAGER.envelope_dir,
+        &DATA_DIR_MANAGER.attachment_dir,
+    ] {
+        if check_index_format(dir) == IndexFormatStatus::NeedsUpgrade {
+            error!("Search index format is outdated; a reindex is required.");
+            rest::maintenance::serve_maintenance(
+                "Community Edition",
+                "Search index upgrade required",
+                &[
+                    "The search indexes were built by an older version of Bichon and must be rebuilt before search works.".to_string(),
+                    "Stop the service (it is already running in maintenance mode).".to_string(),
+                    "Run `bichon-admin reindex` (Docker: `docker exec -it <bichon-container> bichon-admin reindex`).".to_string(),
+                    "Restart the service.".to_string(),
+                ],
+            )
+            .await;
+            return Ok(());
+        }
     }
 
     if let Err(error) = initialize().await {

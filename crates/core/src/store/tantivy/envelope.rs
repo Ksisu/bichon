@@ -50,7 +50,7 @@ use crate::{
             },
             model::{extract_contacts, EnvelopeWithAttachments},
             schema::SchemaTools,
-            tokenizers::EuroTokenizer,
+            tokenizers::{tri_analyzer, word_or_tri, EuroTokenizer},
             WriterSlot,
         },
     },
@@ -155,6 +155,7 @@ impl IndexManager {
     pub fn new() -> Self {
         let index = Arc::new(Self::open_or_create_index(&DATA_DIR_MANAGER.envelope_dir));
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         let index_writer = Self::create_index_writer(&index).unwrap_or_else(|e| {
             panic!(
@@ -365,8 +366,15 @@ impl IndexManager {
             std::fs::create_dir_all(&index_dir).unwrap_or_else(|e| {
                 panic!("Failed to create index directory {:?}: {}", index_dir, e)
             });
-            Index::create_in_dir(&index_dir, SchemaTools::email_schema())
-                .unwrap_or_else(|e| panic!("Failed to create index in {:?}: {}", index_dir, e))
+            let index = Index::create_in_dir(&index_dir, SchemaTools::email_schema())
+                .unwrap_or_else(|e| panic!("Failed to create index in {:?}: {}", index_dir, e));
+            // Fresh installs get stamped with the current index format version.
+            // The open branch never writes — this keeps an old index from being
+            // silently upgraded in place.
+            if let Err(e) = crate::store::tantivy::format::write_index_format_version(index_dir) {
+                tracing::warn!(error = %e, "failed to write INDEX_FORMAT marker for {:?}", index_dir);
+            }
+            index
         } else {
             info!("Opening existing email index at {}", index_dir.display());
             Self::open(&index_dir)
@@ -725,18 +733,29 @@ fn regex_escape(text: &str) -> String {
             let query_parser =
                 QueryParser::for_index(&self.index, SchemaTools::email_default_fields());
 
-            let query = query_parser
+            let word = query_parser
                 .parse_query(text)
                 .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
-            subqueries.push((Occur::Must, Box::new(query)));
+            let tri_fields = [
+                f.f_subject_tri,
+                f.f_from_text_tri,
+                f.f_to_text_tri,
+                f.f_cc_text_tri,
+                f.f_bcc_text_tri,
+                f.f_attachment_name_text_tri,
+            ];
+            subqueries.push((Occur::Must, word_or_tri(word, &tri_fields, text)));
         }
 
         if let Some(ref subject_val) = filter.subject {
             let query_parser = QueryParser::for_index(&self.index, vec![f.f_subject]);
-            let q = query_parser
+            let word = query_parser
                 .parse_query(subject_val)
                 .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
-            subqueries.push((Occur::Must, q));
+            subqueries.push((
+                Occur::Must,
+                word_or_tri(word, &[f.f_subject_tri], subject_val),
+            ));
         }
 
         if let Some(ref body_val) = filter.body {
@@ -775,28 +794,32 @@ fn regex_escape(text: &str) -> String {
             subqueries.push((Occur::Must, Self::has_tags_query(has_tags)));
         }
 
-        for (field, opt_value) in [
-            (f.f_from_text, &filter.from),
-            (f.f_to_text, &filter.to),
-            (f.f_cc_text, &filter.cc),
-            (f.f_bcc_text, &filter.bcc),
+        for (field, tri_field, opt_value) in [
+            (f.f_from_text, f.f_from_text_tri, &filter.from),
+            (f.f_to_text, f.f_to_text_tri, &filter.to),
+            (f.f_cc_text, f.f_cc_text_tri, &filter.cc),
+            (f.f_bcc_text, f.f_bcc_text_tri, &filter.bcc),
         ] {
             if let Some(ref v) = opt_value {
                 let query_parser = QueryParser::for_index(&self.index, vec![field]);
-                let q = query_parser
+                let word = query_parser
                     .parse_query(v)
                     .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
-                subqueries.push((Occur::Must, q));
+                subqueries.push((Occur::Must, word_or_tri(word, &[tri_field], v)));
             }
         }
 
         // any_recipient: OR across to, cc, bcc
         if let Some(ref v) = filter.any_recipient {
             let mut recipient_queries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
-            for field in [f.f_to_text, f.f_cc_text, f.f_bcc_text] {
+            for (field, tri_field) in [
+                (f.f_to_text, f.f_to_text_tri),
+                (f.f_cc_text, f.f_cc_text_tri),
+                (f.f_bcc_text, f.f_bcc_text_tri),
+            ] {
                 let query_parser = QueryParser::for_index(&self.index, vec![field]);
-                if let Ok(q) = query_parser.parse_query(v) {
-                    recipient_queries.push((Occur::Should, q));
+                if let Ok(word) = query_parser.parse_query(v) {
+                    recipient_queries.push((Occur::Should, word_or_tri(word, &[tri_field], v)));
                 }
             }
             if !recipient_queries.is_empty() {
@@ -807,10 +830,15 @@ fn regex_escape(text: &str) -> String {
         // any_participant: OR across from, to, cc, bcc
         if let Some(ref v) = filter.any_participant {
             let mut participant_queries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
-            for field in [f.f_from_text, f.f_to_text, f.f_cc_text, f.f_bcc_text] {
+            for (field, tri_field) in [
+                (f.f_from_text, f.f_from_text_tri),
+                (f.f_to_text, f.f_to_text_tri),
+                (f.f_cc_text, f.f_cc_text_tri),
+                (f.f_bcc_text, f.f_bcc_text_tri),
+            ] {
                 let query_parser = QueryParser::for_index(&self.index, vec![field]);
-                if let Ok(q) = query_parser.parse_query(v) {
-                    participant_queries.push((Occur::Should, q));
+                if let Ok(word) = query_parser.parse_query(v) {
+                    participant_queries.push((Occur::Should, word_or_tri(word, &[tri_field], v)));
                 }
             }
             if !participant_queries.is_empty() {
@@ -844,21 +872,27 @@ fn regex_escape(text: &str) -> String {
 
                 let query_parser =
                     QueryParser::for_index(&self.index, vec![f.f_attachment_name_text]);
-                let q: Box<dyn Query> = query_parser
+                let word: Box<dyn Query> = query_parser
                     .parse_query(name)
                     .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
                 let query = BooleanQuery::new(vec![
                     (Occur::Should, Box::new(exact_query)),
-                    (Occur::Should, Box::new(q)),
+                    (
+                        Occur::Should,
+                        word_or_tri(word, &[f.f_attachment_name_text_tri], name),
+                    ),
                 ]);
                 subqueries.push((Occur::Must, Box::new(query)));
             } else {
                 let query_parser =
                     QueryParser::for_index(&self.index, vec![f.f_attachment_name_text]);
-                let q = query_parser
+                let word = query_parser
                     .parse_query(name)
                     .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
-                subqueries.push((Occur::Must, q));
+                subqueries.push((
+                    Occur::Must,
+                    word_or_tri(word, &[f.f_attachment_name_text_tri], name),
+                ));
             }
         }
 
@@ -2577,6 +2611,7 @@ mod tests {
         // ---- setup: in-memory index + document --------------------
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         {
             let mut writer = index
@@ -2718,6 +2753,7 @@ mod tests {
         // back to the document.  Search for it.
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
         let mut writer = index
             .writer_with_num_threads(1, 15_000_000)
             .expect("writer");
@@ -2760,6 +2796,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         // Insert two docs for mailbox 10, one for mailbox 20
         {
@@ -2840,6 +2877,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         {
             let mut writer = index
@@ -2888,6 +2926,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         {
             let mut writer = index
@@ -2944,6 +2983,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         {
             let mut writer = index
@@ -2998,6 +3038,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         {
             let mut writer = index
@@ -3116,6 +3157,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         let mailbox_id = 42u64;
 
@@ -3252,6 +3294,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         let cutoff = 1_700_000_000_000i64;
         let old = cutoff - 1_000;
@@ -3425,6 +3468,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         {
             let mut writer = index
@@ -3542,6 +3586,7 @@ mod tests {
 
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
         {
             let mut writer = index.writer_with_num_threads(1, 15_000_000).unwrap();
             // Sent by the person, to someone else.
@@ -3622,6 +3667,7 @@ mod tests {
 
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
         {
             let mut writer = index.writer_with_num_threads(1, 15_000_000).unwrap();
             writer
@@ -3701,6 +3747,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
         {
             let mut writer = index.writer_with_num_threads(1, 15_000_000).unwrap();
             for (i, (from, to, cc, bcc)) in fixtures.iter().enumerate() {
@@ -3775,6 +3822,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         // A message with no facet value at all must coexist with tagged ones
         // in the same segment: the fast field is then sparse, which is what
@@ -3849,6 +3897,7 @@ mod tests {
         let f = SchemaTools::email_fields();
         let index = Index::create_in_ram(SchemaTools::email_schema());
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         let ids = [
             "550e8400-e29b-41d4-a716-446655440000",
@@ -3904,6 +3953,217 @@ mod tests {
         assert!(
             matching_ids(IndexManager::envelope_id_query("no-such-id")).is_empty(),
             "an unknown id must match nothing rather than fall back to a fuzzy hit"
+        );
+    }
+}
+
+/// Regression cases for the search fix (#361 / #215): deterministic word-level
+/// plus the thresholded trigram layer.
+#[cfg(test)]
+mod search_fix_tests {
+    use super::*;
+    use crate::store::tantivy::tokenizers::{
+        tri_analyzer, tri_query, word_or_tri, EuroTokenizer,
+    };
+    use tantivy::{collector::Count, query::QueryParser, Index};
+
+    /// Build an in-memory index with trigram fields and write (subject, body)
+    /// messages; the id is the subject to make assertions easy.
+    fn build_index(docs: &[(&str, &str)]) -> Index {
+        let index = Index::create_in_ram(SchemaTools::email_schema());
+        index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
+        let f = SchemaTools::email_fields();
+        {
+            let mut writer = index.writer_with_num_threads(1, 15_000_000).unwrap();
+            for (subject, body) in docs {
+                let mut d = TantivyDocument::new();
+                d.add_text(f.f_id, *subject);
+                d.add_text(f.f_subject, *subject);
+                d.add_text(f.f_subject_tri, *subject);
+                d.add_text(f.f_body, *body);
+                writer.add_document(d).unwrap();
+            }
+            writer.commit().unwrap();
+        }
+        index
+    }
+
+    fn count(index: &Index, query: &dyn Query) -> usize {
+        let reader = index.reader().unwrap();
+        reader.reload().unwrap();
+        reader.searcher().search(query, &Count).unwrap()
+    }
+
+    /// Ids (i.e. subjects) of the matching messages, sorted.
+    fn matching_ids(index: &Index, query: &dyn Query) -> Vec<String> {
+        let f = SchemaTools::email_fields();
+        let reader = index.reader().unwrap();
+        reader.reload().unwrap();
+        let searcher = reader.searcher();
+        let mut ids: Vec<String> = searcher
+            .search(query, &DocSetCollector)
+            .unwrap()
+            .into_iter()
+            .map(|addr| {
+                let doc: TantivyDocument = searcher.doc(addr).unwrap();
+                doc.get_first(f.f_id).unwrap().as_str().unwrap().to_string()
+            })
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    fn word_query(index: &Index, field: tantivy::schema::Field, term: &str) -> Box<dyn Query> {
+        QueryParser::for_index(index, vec![field])
+            .parse_query(term)
+            .unwrap()
+    }
+
+    /// #361 core: words in a Danish subject must be findable no matter what
+    /// language the whole string is judged to be. This case necessarily fails
+    /// under the old whichlang tokenizer (the whole string was judged Danish and
+    /// stemmed, the single word was judged another language, so the index term
+    /// differed from the query term).
+    #[test]
+    fn issue_361_danish_subject_is_findable() {
+        let index = build_index(&[("VS: Sejlerferie i Kroatien med skipper", "body here")]);
+        let f = SchemaTools::email_fields();
+
+        for term in ["Sejlerferie", "Kroatien", "skipper"] {
+            assert_eq!(
+                count(&index, word_query(&index, f.f_subject, term).as_ref()),
+                1,
+                "word-level: {term}"
+            );
+            let combined = word_or_tri(
+                word_query(&index, f.f_subject, term),
+                &[f.f_subject_tri],
+                term,
+            );
+            assert_eq!(count(&index, combined.as_ref()), 1, "word+tri: {term}");
+        }
+    }
+
+    /// #215 scenario: a body word hits, and a two-word query (both words in the
+    /// body) hits.
+    #[test]
+    fn issue_215_body_word_and_multiword() {
+        let index = build_index(&[("Rechnung", "laserdrucker brother toner")]);
+        let f = SchemaTools::email_fields();
+
+        assert_eq!(
+            count(
+                &index,
+                word_query(&index, f.f_body, "laserdrucker").as_ref()
+            ),
+            1
+        );
+        assert_eq!(
+            count(
+                &index,
+                word_query(&index, f.f_body, "laserdrucker brother").as_ref()
+            ),
+            1
+        );
+    }
+
+    /// Morphology coverage across Nordic and Southern-European languages, plus
+    /// the short-term precision boundary of the trigram layer.
+    ///
+    /// Measured behaviour this pins down:
+    /// - the word level is exact and accent-insensitive (deunicode folds `café`,
+    ///   so `cafe` finds it);
+    /// - the trigram layer recovers one level of morphology: Danish definite
+    ///   forms (`bil` → `bilen`), Nordic compounds (`ferie` ⊂ `sejlerferie`),
+    ///   Romance conjugation (`mangio` → `mangiare`), German/Latin inflection
+    ///   (`Kroatiens` → `Kroatien`);
+    /// - a 4-character term must NOT over-match: `haus` must not drag in
+    ///   `Mauser`, even though both contain the `aus` gram;
+    /// - a 3-character term is a pure substring match (a single gram), which is
+    ///   intended.
+    #[test]
+    fn nordic_and_romance_morphology() {
+        let index = build_index(&[
+            ("Sejlerferie i Kroatien", ""),
+            ("bilen er rod", ""),
+            ("café con leche", ""),
+            ("mangiare la pasta", ""),
+            ("Haus am See", ""),
+            ("Mauser Gewehr", ""),
+        ]);
+        let f = SchemaTools::email_fields();
+        let subj_tri = [f.f_subject_tri];
+
+        let word = |term: &str| {
+            matching_ids(
+                &index,
+                QueryParser::for_index(&index, vec![f.f_subject])
+                    .parse_query(term)
+                    .unwrap()
+                    .as_ref(),
+            )
+        };
+        let tri = |term: &str| matching_ids(&index, tri_query(&subj_tri, term).as_ref());
+
+        // ── exact word level, accent-insensitive ──
+        assert_eq!(word("Kroatien"), ["Sejlerferie i Kroatien"]);
+        assert_eq!(word("cafe"), ["café con leche"], "deunicode folds the accent");
+        assert_eq!(word("Haus"), ["Haus am See"]);
+
+        // ── trigram recovers one level of morphology ──
+        assert_eq!(
+            tri("Kroatiens"),
+            ["Sejlerferie i Kroatien"],
+            "one-level inflection"
+        );
+        assert_eq!(tri("bil"), ["bilen er rod"], "Danish definite form");
+        assert_eq!(tri("ferie"), ["Sejlerferie i Kroatien"], "Nordic compound");
+        assert_eq!(tri("mangio"), ["mangiare la pasta"], "Romance conjugation");
+
+        // ── a 4-character term must not over-match ──
+        // Two grams means no leave-one-out variant, so both grams are required —
+        // i.e. an exact 4-character substring.
+        assert_eq!(tri("haus"), ["Haus am See"], "must not drag in Mauser");
+        assert_eq!(tri("Haus"), ["Haus am See"], "case-insensitive, same result");
+
+        // ── a 3-character term is a single gram = pure substring match ──
+        assert_eq!(
+            tri("aus"),
+            ["Haus am See", "Mauser Gewehr"],
+            "intended substring semantics for 3-char terms"
+        );
+    }
+
+    /// §8.3 trigram threshold: tolerate one level of inflection, reject noise
+    /// driven by a single common gram.
+    #[test]
+    fn trigram_recall_and_threshold() {
+        let index = build_index(&[
+            ("Kroatien", ""),
+            ("Laserdrucker", ""),
+            ("Versandinformation", ""),
+        ]);
+        let f = SchemaTools::email_fields();
+        let subj_tri = [f.f_subject_tri];
+
+        // Inflection: kroatiens and kroatien share 6/7 grams → hit
+        assert_eq!(
+            matching_ids(&index, tri_query(&subj_tri, "Kroatiens").as_ref()),
+            vec!["Kroatien".to_string()]
+        );
+        // All-gram substring: laserdruck ⊂ laserdrucker → hit
+        assert_eq!(
+            matching_ids(&index, tri_query(&subj_tri, "laserdruck").as_ref()),
+            vec!["Laserdrucker".to_string()]
+        );
+        // A single shared gram must not hit: laserdruckers and
+        // versandinformation share only "ers", so only the genuine one-level
+        // inflection target (laserdrucker) should match.
+        assert_eq!(
+            matching_ids(&index, tri_query(&subj_tri, "laserdruckers").as_ref()),
+            vec!["Laserdrucker".to_string()],
+            "a single shared gram must not drag in Versandinformation"
         );
     }
 }

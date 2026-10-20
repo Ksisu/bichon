@@ -45,7 +45,7 @@ use crate::{
         },
         model::{extract_senders, AttachmentModel},
         schema::SchemaTools,
-        tokenizers::EuroTokenizer,
+        tokenizers::{tri_analyzer, word_or_tri, EuroTokenizer},
         WriterSlot,
     },
 };
@@ -116,6 +116,7 @@ impl IndexManager {
     pub fn new() -> Self {
         let index = Arc::new(Self::open_or_create_index(&DATA_DIR_MANAGER.attachment_dir));
         index.tokenizers().register("euro", EuroTokenizer::new());
+        index.tokenizers().register("tri", tri_analyzer());
 
         let index_writer = Self::create_index_writer(&index).unwrap_or_else(|e| {
             panic!(
@@ -323,8 +324,15 @@ impl IndexManager {
             std::fs::create_dir_all(&index_dir).unwrap_or_else(|e| {
                 panic!("Failed to create index directory {:?}: {}", index_dir, e)
             });
-            Index::create_in_dir(&index_dir, SchemaTools::attachment_schema())
-                .unwrap_or_else(|e| panic!("Failed to create index in {:?}: {}", index_dir, e))
+            let index = Index::create_in_dir(&index_dir, SchemaTools::attachment_schema())
+                .unwrap_or_else(|e| panic!("Failed to create index in {:?}: {}", index_dir, e));
+            // Fresh installs get stamped with the current index format version.
+            // The open branch never writes — this keeps an old index from being
+            // silently upgraded in place.
+            if let Err(e) = crate::store::tantivy::format::write_index_format_version(index_dir) {
+                tracing::warn!(error = %e, "failed to write INDEX_FORMAT marker for {:?}", index_dir);
+            }
+            index
         } else {
             info!(
                 "Opening existing attachment index at {}",
@@ -436,18 +444,22 @@ impl IndexManager {
             let query_parser =
                 QueryParser::for_index(&self.index, SchemaTools::attachment_default_fields());
 
-            let query = query_parser
+            let word = query_parser
                 .parse_query(text)
                 .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
-            subqueries.push((Occur::Must, Box::new(query)));
+            let tri_fields = [f.f_subject_tri, f.f_from_text_tri, f.f_name_text_tri];
+            subqueries.push((Occur::Must, word_or_tri(word, &tri_fields, text)));
         }
 
         if let Some(ref subject_val) = filter.subject {
             let query_parser = QueryParser::for_index(&self.index, vec![f.f_subject]);
-            let q = query_parser
+            let word = query_parser
                 .parse_query(subject_val)
                 .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
-            subqueries.push((Occur::Must, q));
+            subqueries.push((
+                Occur::Must,
+                word_or_tri(word, &[f.f_subject_tri], subject_val),
+            ));
         }
 
         if let Some(ref tags) = filter.tags {
@@ -472,10 +484,10 @@ impl IndexManager {
 
         if let Some(from_query) = &filter.from {
             let query_parser = QueryParser::for_index(&self.index, vec![f.f_from_text]);
-            let q = query_parser
+            let word = query_parser
                 .parse_query(from_query)
                 .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
-            subqueries.push((Occur::Must, q))
+            subqueries.push((Occur::Must, word_or_tri(word, &[f.f_from_text_tri], from_query)))
         }
 
         if let Some(content_hash) = &filter.content_hash {
@@ -494,10 +506,10 @@ impl IndexManager {
             let query_parser =
                 QueryParser::for_index(&self.index, vec![f.f_name_text, f.f_name_exact]);
 
-            let q = query_parser
+            let word = query_parser
                 .parse_query(name)
                 .map_err(|e| raise_error!(format!("{:#?}", e), ErrorCode::InvalidParameter))?;
-            subqueries.push((Occur::Must, q));
+            subqueries.push((Occur::Must, word_or_tri(word, &[f.f_name_text_tri], name)));
         }
 
         if let Some(ref extension) = filter.attachment_extension {
