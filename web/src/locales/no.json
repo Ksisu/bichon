@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "Grunnleggende systemtilgang",
+      "metrics": "Vis Prometheus-metrikker",
       "root": "Full systemkontroll"
     },
     "timestamp": {

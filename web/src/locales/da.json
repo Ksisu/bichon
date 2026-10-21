@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "Grundlæggende systemadgang",
+      "metrics": "Se Prometheus-metrikker",
       "root": "Fuld systemkontrol"
     },
     "timestamp": {

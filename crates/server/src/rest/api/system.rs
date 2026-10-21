@@ -30,9 +30,21 @@ use bichon_core::users::permissions::Permission;
 use bichon_core::version::{fetch_notifications, Notifications};
 use poem_openapi::param::Path;
 use poem_openapi::payload::{Json, PlainText};
-use poem_openapi::OpenApi;
+use poem_openapi::{ApiResponse, OpenApi};
 
 pub struct SystemApi;
+
+#[derive(ApiResponse)]
+pub enum MetricsResponse {
+    /// OpenMetrics 1.0 text exposition, terminated by `# EOF`.
+    // The attribute needs a literal: keep it equal to
+    // `bichon_core::metrics::OPENMETRICS_CONTENT_TYPE` (metrics_tests asserts it).
+    #[oai(
+        status = 200,
+        content_type = "application/openmetrics-text; version=1.0.0; charset=utf-8"
+    )]
+    Ok(PlainText<String>),
+}
 
 #[OpenApi(prefix_path = "/api/v1", tag = "ApiTags::System")]
 impl SystemApi {
@@ -73,6 +85,20 @@ impl SystemApi {
     ) -> ApiResult<Json<DashboardStats>> {
         let stats = DashboardStats::get(context.0).await?;
         Ok(Json(stats))
+    }
+
+    /// Prometheus / OpenMetrics scrape endpoint.
+    ///
+    /// Returns operational metrics in the OpenMetrics 1.0 text format: build
+    /// info, per-account sync state and archive totals. Requires the
+    /// `system:metrics` global permission (administrators always pass), so a
+    /// dedicated scrape user can hold just that. The exposition includes every
+    /// account's email address and name, never message content.
+    #[oai(method = "get", path = "/metrics", operation_id = "get_metrics")]
+    async fn get_metrics(&self, context: WrappedContext) -> ApiResult<MetricsResponse> {
+        context.require_permission(None, Permission::SYSTEM_METRICS)?;
+        let body = bichon_core::metrics::render().await?;
+        Ok(MetricsResponse::Ok(PlainText(body)))
     }
 
     /// Get the full list of proxy configurations.

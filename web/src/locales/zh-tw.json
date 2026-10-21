@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "基本系統存取",
+      "metrics": "檢視 Prometheus 指標",
       "root": "系統最高控制權"
     },
     "timestamp": {

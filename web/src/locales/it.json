@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "Accesso di base al sistema",
+      "metrics": "Visualizzare le metriche Prometheus",
       "root": "Controllo completo del sistema"
     },
     "timestamp": {

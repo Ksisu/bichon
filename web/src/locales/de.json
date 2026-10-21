@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "Grundlegender Systemzugriff",
+      "metrics": "Prometheus-Metriken abrufen",
       "root": "Vollständige Systemkontrolle"
     },
     "timestamp": {

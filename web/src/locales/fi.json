@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "Perusjärjestelmän käyttö",
+      "metrics": "Prometheus-mittareiden tarkastelu",
       "root": "Täysi järjestelmän hallinta"
     },
     "timestamp": {

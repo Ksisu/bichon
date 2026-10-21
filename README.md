@@ -67,6 +67,7 @@
 - [Authentication & RBAC](#authentication--rbac)
 - [CLI Tools](#cli-tools)
 - [API Reference](#api-reference)
+- [Monitoring (Prometheus / OpenMetrics)](#monitoring-prometheus--openmetrics)
 - [Import & Export](#import--export)
 - [Architecture](#architecture)
 - [Storage & Backup](#storage--backup)
@@ -93,8 +94,9 @@
 - **Three-Layer Storage**: Tantivy for full-text indexing (Zstd compression), bichon-blob with Zstd for compressed blob storage, and memdb for relational metadata. All embedded — zero external dependencies.
 - **Content Deduplication**: Identical email bodies and attachments stored once via BLAKE3 content hashing. Folder moves update metadata only.
 - **Dashboard Analytics**: Email volume trends, top senders, storage usage breakdown, attachment statistics, and per-account activity. Scoped by user permissions.
+- **Prometheus / OpenMetrics**: Scrape endpoint with per-account sync state, archive totals and storage sizes, protected by a dedicated `system:metrics` permission.
 - **OpenAPI 3.0**: Interactive API documentation at `/api-docs` (Swagger UI, ReDoc, Scalar). All endpoints documented with request/response schemas.
-- **Multi-User RBAC**: 5 built-in roles (Admin, Manager, Member, AccountManager, AccountViewer) plus custom roles with 22 granular permissions.
+- **Multi-User RBAC**: 5 built-in roles (Admin, Manager, Member, AccountManager, AccountViewer) plus custom roles with 23 granular permissions.
 - **Account-Level Isolation**: Grant users access to specific accounts with scoped roles. Permissions enforced at the API layer.
 - **CLI & WebUI Import Tools**: Import from EML directories, MBOX files (including Gmail variants), Thunderbird profiles, and Outlook PST files via CLI. Import EML files directly from the WebUI.
 - **CLI Export**: Download account data as MBOX via `bichon-cli`.
@@ -315,6 +317,7 @@ On first start, Bichon creates a built-in admin user:
 |------------|-------------|
 | `system:access` | Login and access the dashboard |
 | `system:root` | Manage system configurations (OAuth providers, proxy settings) |
+| `system:metrics` | Read operational metrics from `/api/v1/metrics` (includes account addresses and names, no mail content) |
 | `user:manage` | Create, update, and delete users |
 | `user:view` | View user list and basic profiles |
 | `token:manage` | View and revoke all API tokens |
@@ -390,6 +393,76 @@ Interactive API documentation is available at:
 | `/api-docs/spec.yaml` | Raw OpenAPI 3.0 YAML |
 
 All `/api/v1/*` endpoints require `Authorization: Bearer <token>`.
+
+## Monitoring (Prometheus / OpenMetrics)
+
+Bichon exposes operational metrics in the [OpenMetrics](https://openmetrics.io/) text format at:
+
+```
+GET {BICHON_BASE_URL}/api/v1/metrics
+Authorization: Bearer <token>
+```
+
+The endpoint requires the `system:metrics` global permission (administrators always have access). The exposition includes every account's email address and name, but never message content.
+
+The response is always OpenMetrics 1.0 (`application/openmetrics-text`). The `Accept` header is not negotiated, so the scraper must understand OpenMetrics; Prometheus does.
+
+### Setup
+
+1. **Users → Roles**: create a *Global* role (e.g. "Monitoring") with only the `system:metrics` permission.
+2. **Users**: create a user (e.g. `prometheus`) with that role.
+3. Create an API token for that user without an expiry (WebUI, or `POST /api/v1/access-token` with `{"name": "prometheus", "user_id": <id>}` as an admin).
+4. Optionally restrict the user with an ACL IP whitelist for your Prometheus host. A per-user rate limit applies to scrapes too; if one is set, keep it above your scrape rate.
+
+```yaml
+scrape_configs:
+  - job_name: bichon
+    metrics_path: /api/v1/metrics   # prefix with BICHON_BASE_URL if set, e.g. /bichon/api/v1/metrics
+    scheme: http                    # https when BICHON_ENABLE_REST_HTTPS=true
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/bichon.token
+    static_configs:
+      - targets: ['bichon:15630']
+```
+
+### Metrics
+
+Per-account series are labeled with `account_id` only. Join with `bichon_account_info` to get the email address and name, e.g. `... * on(account_id) group_left(email, name) bichon_account_info`.
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `bichon_build_info` | `version` | Always 1 |
+| `bichon_start_time_seconds` | — | Unix time the server started |
+| `bichon_account_info` | `account_id`, `email`, `name`, `type` (`imap`/`nosync`/`view`), `auth` (`password`/`oauth2`/`none`), `enabled` | Always 1, one series per account |
+| `bichon_account_sync_running` | `account_id` | 1 while a download session runs in this process (IMAP accounts) |
+| `bichon_account_last_sync_timestamp_seconds` | `account_id` | When the last download session ended, whatever its result |
+| `bichon_account_last_sync_success` | `account_id` | 1 if that same session succeeded, 0 if it failed or was cancelled |
+| `bichon_account_last_successful_sync_timestamp_seconds` | `account_id` | When the newest successful session finished |
+| `bichon_account_last_sync_duration_seconds` | `account_id` | Duration of the last session that succeeded or failed; cancelled and interrupted sessions are skipped |
+| `bichon_emails` | — | Emails in the archive |
+| `bichon_attachments` | — | Attachments in the archive |
+| `bichon_index_size_bytes` | `index` (`envelope`/`attachment`) | On-disk size of each full-text index |
+| `bichon_storage_size_bytes` | — | On-disk size of the blob storage |
+| `bichon_scrape_collector_success` | `collector` (`accounts`/`index`/`disk`) | 0 when that part of the scrape could not be collected and its series were left out |
+
+Sync timestamps and results are read from persisted state, so they survive restarts. Document counts and on-disk sizes are cached for up to 30 seconds; a part that failed is retried after that.
+
+### Example alerts
+
+```yaml
+groups:
+  - name: bichon
+    rules:
+      - alert: BichonNoSuccessfulSync24h
+        expr: (time() - bichon_account_last_successful_sync_timestamp_seconds > 86400) * on(account_id) group_left(email, name) bichon_account_info{enabled="true"}
+      - alert: BichonNeverSynced   # no successful sync recorded
+        expr: bichon_account_info{type="imap", enabled="true"} unless on(account_id) bichon_account_last_successful_sync_timestamp_seconds
+        for: 24h
+      - alert: BichonMetricsCollectorFailing
+        expr: bichon_scrape_collector_success == 0
+        for: 15m
+```
 
 ## Import & Export
 

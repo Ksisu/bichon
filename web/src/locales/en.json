@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "Basic System Access",
+      "metrics": "View Prometheus Metrics",
       "root": "Root System Control"
     },
     "timestamp": {

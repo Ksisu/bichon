@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "Basistoegang tot het systeem",
+      "metrics": "Prometheus-metrieken bekijken",
       "root": "Volledige systeemcontrole"
     },
     "timestamp": {

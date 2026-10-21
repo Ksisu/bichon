@@ -17,7 +17,10 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use crate::{
-    database::{delete_impl, find_impl, manager::DB_MANAGER, update_impl, upsert_impl, MemDbModel},
+    database::{
+        delete_impl, find_impl, list_all_impl, manager::DB_MANAGER, update_impl, upsert_impl,
+        MemDbModel,
+    },
     error::BichonResult,
     utc_now,
 };
@@ -146,6 +149,12 @@ pub struct DownloadState {
     pub history: Vec<DownloadSession>,
     pub last_trigger_at: i64,
     pub last_finished_at: Option<i64>,
+    /// When the newest successful session finished. Kept apart from `history`,
+    /// which only holds the last 10 sessions, so a long run of failures cannot
+    /// erase it. `#[serde(default)]` loads records written before this field
+    /// existed as `None`.
+    #[serde(default)]
+    pub last_success_at: Option<i64>,
 }
 
 impl MemDbModel for DownloadState {
@@ -185,12 +194,18 @@ impl DownloadState {
             }),
             history: Default::default(),
             last_finished_at: Default::default(),
+            last_success_at: Default::default(),
         };
         upsert_impl(DB_MANAGER.db(), state)
     }
 
     pub fn get(account_id: u64) -> BichonResult<Option<DownloadState>> {
         find_impl::<DownloadState>(DB_MANAGER.db(), &account_id.to_string())
+    }
+
+    /// Every account's download state (one row per account that has synced).
+    pub fn list_all() -> BichonResult<Vec<DownloadState>> {
+        list_all_impl::<DownloadState>(DB_MANAGER.db())
     }
 
     pub fn start_new_session(account_id: u64, trigger: TriggerType) -> BichonResult<()> {
@@ -240,6 +255,9 @@ impl DownloadState {
                     let now = utc_now!();
                     session.end_time = Some(now);
                     updated.last_finished_at = Some(now);
+                    if status == DownloadStatus::Success {
+                        updated.last_success_at = Some(now);
+                    }
                     updated.history.push(session);
                     let to_remove = updated.history.len().saturating_sub(10);
                     if to_remove > 0 {
@@ -565,5 +583,78 @@ impl GapFillState {
             update_impl(DB_MANAGER.db(), &account_id.to_string(), updater)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Once;
+
+    use super::*;
+    use crate::backup::BACKUP_STATE_TESTS;
+    use crate::settings::{cli::SETTINGS, dir::DATA_DIR_MANAGER};
+
+    /// Same pid-derived data root as the other memdb-backed tests in this
+    /// binary, so `SETTINGS` and `DB_MANAGER` freeze on one root.
+    static TEST_ENV: Once = Once::new();
+
+    fn init_test_env() {
+        TEST_ENV.call_once(|| {
+            let root = crate::test_support::unique_test_root("bichon-core-test");
+            std::env::set_var("BICHON_ROOT_DIR", &root);
+            std::env::set_var("BICHON_ENCRYPT_PASSWORD", "test-password");
+            let _ = &*SETTINGS;
+            let _ = &*DATA_DIR_MANAGER;
+            let _ = &*DB_MANAGER;
+        });
+    }
+
+    fn run_session(account_id: u64, status: DownloadStatus) {
+        DownloadState::start_new_session(account_id, TriggerType::Scheduled).unwrap();
+        DownloadState::update_session_status(account_id, status, None).unwrap();
+    }
+
+    /// The history keeps only the last 10 sessions, so after 11 failures the
+    /// success is gone from it; `last_success_at` must still remember it.
+    #[tokio::test]
+    async fn last_success_survives_a_run_of_failures_longer_than_the_history() {
+        init_test_env();
+        // Every write here goes through the backup write gate, so serialize
+        // with the tests that pause it (see `backup::BACKUP_STATE_TESTS`).
+        let _gate = BACKUP_STATE_TESTS.lock().await;
+        let account_id = 9_200_001;
+        upsert_impl(DB_MANAGER.db(), DownloadState::empty(account_id)).unwrap();
+
+        run_session(account_id, DownloadStatus::Success);
+        let success_at = DownloadState::get(account_id)
+            .unwrap()
+            .unwrap()
+            .last_success_at
+            .expect("a successful session records last_success_at");
+        for _ in 0..11 {
+            run_session(account_id, DownloadStatus::Failed);
+        }
+
+        let state = DownloadState::get(account_id).unwrap().unwrap();
+        DownloadState::delete(account_id).unwrap();
+        assert!(
+            state
+                .history
+                .iter()
+                .all(|session| session.status == DownloadStatus::Failed),
+            "the success should have been rotated out of the history"
+        );
+        assert_eq!(state.last_success_at, Some(success_at));
+    }
+
+    /// Records written before `last_success_at` existed must still load.
+    #[test]
+    fn download_state_without_last_success_at_still_loads() {
+        let state: DownloadState = serde_json::from_str(
+            r#"{"account_id":1,"active_session":null,"history":[],"last_trigger_at":0,"last_finished_at":5}"#,
+        )
+        .unwrap();
+        assert_eq!(state.last_finished_at, Some(5));
+        assert_eq!(state.last_success_at, None);
     }
 }

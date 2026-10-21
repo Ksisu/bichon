@@ -312,13 +312,23 @@ pub fn get_total_size(path: &PathBuf) -> io::Result<u64> {
 
     let mut total_size = 0u64;
     for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let entry_path = entry.path();
+        let entry_path = entry?.path();
 
-        if entry_path.is_file() {
-            total_size += fs::metadata(&entry_path)?.len();
-        } else if entry_path.is_dir() {
-            total_size += get_total_size(&entry_path)?;
+        // Tantivy deletes merged segment files while we walk, so an entry can
+        // vanish after `read_dir` listed it; it simply no longer counts.
+        let metadata = match fs::metadata(&entry_path) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        if metadata.is_file() {
+            total_size += metadata.len();
+        } else if metadata.is_dir() {
+            match get_total_size(&entry_path) {
+                Ok(size) => total_size += size,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
         }
     }
 

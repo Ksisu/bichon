@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "기본 시스템 접근",
+      "metrics": "Prometheus 메트릭 조회",
       "root": "시스템 전체 제어"
     },
     "timestamp": {

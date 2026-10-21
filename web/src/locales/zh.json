@@ -1935,6 +1935,7 @@
     },
     "system": {
       "access": "基础系统访问",
+      "metrics": "查看 Prometheus 指标",
       "root": "系统最高控制权"
     },
     "timestamp": {

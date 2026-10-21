@@ -49,7 +49,7 @@ export function PermissionsDialog({ currentRow, open, onOpenChange }: Props) {
   const globalCategories = [
     {
       titleKey: "roles.categories.identity",
-      keys: ["system:access", "system:root", "user:manage", "user:view", "token:manage", "account:create"]
+      keys: ["system:access", "system:root", "system:metrics", "user:manage", "user:view", "token:manage", "account:create"]
     },
     {
       titleKey: "roles.categories.global_data",

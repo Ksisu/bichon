@@ -78,6 +78,11 @@ impl AccountDownTask {
     //     self.busy_accounts.lock().await.contains(&account_id)
     // }
 
+    /// Accounts a scheduled or manual download task is currently working on.
+    pub async fn busy_account_ids(&self) -> HashSet<u64> {
+        self.busy_accounts.lock().await.clone()
+    }
+
     pub async fn start_download_task(&self, account_id: u64, email: String) {
         let task_name = format!("account-download-task-{}-{}", account_id, &email);
         let periodic_task = PeriodicTask::new(&task_name);

@@ -50,6 +50,12 @@ impl Permission {
     /// Manage core system configurations (OAuth Client ID/Secret, Proxy settings).
     pub const ROOT: &str = "system:root";
 
+    /// Read operational metrics through the Prometheus / OpenMetrics endpoint
+    /// (`GET /api/v1/metrics`). The exposition includes every account's email
+    /// address and display name, never message content. Grants nothing else, so
+    /// a dedicated scrape user can hold just this permission.
+    pub const SYSTEM_METRICS: &str = "system:metrics";
+
     /// Create, modify, and delete all users and their roles (Admin only).
     pub const USER_MANAGE: &str = "user:manage";
 
@@ -151,6 +157,10 @@ impl Permission {
                 "Basic platform access for dashboard and personal settings.",
             ),
             (Self::ROOT, "Full system access and configuration."),
+            (
+                Self::SYSTEM_METRICS,
+                "Read Prometheus/OpenMetrics operational metrics (includes account addresses, no mail content).",
+            ),
             (Self::USER_MANAGE, "Create, update, and delete users."),
             (
                 Self::USER_VIEW,
@@ -288,5 +298,34 @@ impl Permission {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(perms: &[&str]) -> BTreeSet<String> {
+        perms.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[test]
+    fn system_metrics_is_a_valid_global_permission() {
+        assert!(VALID_PERMISSION_SET.contains(Permission::SYSTEM_METRICS));
+        Permission::validate_role_permissions(
+            &RoleType::Global,
+            &set(&[Permission::SYSTEM_METRICS]),
+        )
+        .expect("system:metrics must be accepted on a global role");
+    }
+
+    #[test]
+    fn system_metrics_is_rejected_on_an_account_role() {
+        let err = Permission::validate_role_permissions(
+            &RoleType::Account,
+            &set(&[Permission::SYSTEM_METRICS]),
+        )
+        .expect_err("system:metrics is global-only");
+        assert_eq!(err.code(), ErrorCode::InvalidParameter);
     }
 }

@@ -60,6 +60,11 @@ impl BichonContext {
         utc_now!() - self.start_at
     }
 
+    /// Unix time in milliseconds at which the process started.
+    pub fn start_at(&self) -> i64 {
+        self.start_at
+    }
+
     pub async fn start_account_downloader(&self) -> BichonResult<()> {
         let accounts = AccountModel::list_all()?;
         let active_accounts: Vec<AccountModel> = accounts
