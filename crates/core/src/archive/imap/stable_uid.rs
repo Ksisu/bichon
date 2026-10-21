@@ -18,7 +18,7 @@
 
 //! Stable archive-side IMAP UID allocation.
 //!
-//! Invariants (see IMAP-UID-IMPLEMENTATION.md):
+//! Invariants:
 //! 1. A UID is only handed out from a range that was persisted (fsync'd)
 //!    beforehand; crashes may waste numbers, never reissue them.
 //! 2. UIDs are write-once: assigned at envelope creation, carried (never
@@ -417,9 +417,7 @@ mod tests {
 
     fn init_test_env() {
         TEST_ENV.call_once(|| {
-            let root =
-                std::env::temp_dir().join(format!("bichon-core-test-{}", std::process::id()));
-            std::fs::create_dir_all(&root).unwrap();
+            let root = crate::test_support::unique_test_root("bichon-core-test");
             std::env::set_var("BICHON_ROOT_DIR", &root);
             std::env::set_var("BICHON_ENCRYPT_PASSWORD", "test-password");
             let _ = &*SETTINGS;

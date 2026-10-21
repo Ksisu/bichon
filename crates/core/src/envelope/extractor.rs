@@ -1497,11 +1497,7 @@ mod test {
 
     fn init_test_env() {
         TEST_ENV.call_once(|| {
-            let root = std::env::temp_dir().join(format!(
-                "bichon-extractor-test-{}",
-                std::process::id()
-            ));
-            std::fs::create_dir_all(&root).unwrap();
+            let root = crate::test_support::unique_test_root("bichon-extractor-test");
             std::env::set_var("BICHON_ROOT_DIR", &root);
             std::env::set_var("BICHON_ENCRYPT_PASSWORD", "test-password");
             let _ = &*crate::settings::cli::SETTINGS;
@@ -1530,6 +1526,76 @@ mod test {
             )
             .await;
             assert_ne!(infos[0].storage_hash(), infos[0].content_hash);
+        });
+    }
+
+    /// Ingest must hand every archived message a stable UID, and a duplicate
+    /// must not consume one.
+    ///
+    /// The assertions are on the counter, not on the index: `ENVELOPE_MANAGER`
+    /// is process-global and its writer task belongs to whichever test's runtime
+    /// initialized it, so a document queued here is not reliably committed (the
+    /// same coupling that retired the blob roundtrip test below). The document
+    /// side is covered where it can be observed deterministically:
+    /// `to_document` refuses an unassigned UID, `rebuild_envelope_doc` carries
+    /// it (see `store::tantivy::envelope`), and the IMAP-side ordering reads it
+    /// back (see `bichon-imap::uid_map`).
+    #[test]
+    fn ingest_assigns_a_stable_uid_and_dedup_does_not_burn_one() {
+        use crate::account::migration::{Account, AccountType};
+        use crate::database::{manager::DB_MANAGER, upsert_impl};
+
+        STORAGE_RUNTIME.block_on(async {
+            let _run_guard = crate::backup::BACKUP_STATE_TESTS.lock().await;
+            // Ingest queues into the process-global envelope index, so hold the
+            // lock that serializes every test writing it (concurrent commits to
+            // one tantivy directory are refused by Windows).
+            let _index_guard = crate::test_support::GLOBAL_INDEX_LOCK.lock().await;
+            init_test_env();
+
+            let account_id = 9_300_501;
+            let mailbox_id = 77;
+            // Ingest requires the account row: the UID counter lives on it.
+            upsert_impl(
+                DB_MANAGER.db(),
+                Account {
+                    id: account_id,
+                    account_type: AccountType::IMAP,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            let eml = b"From: alice@example.com\r\n\
+                        To: bob@example.com\r\n\
+                        Subject: stable uid\r\n\
+                        Date: Thu, 01 Jan 2023 00:00:00 +0000\r\n\
+                        Message-ID: <uid-t5@example.com>\r\n\
+                        \r\n\
+                        body of the archived message\r\n";
+
+            let first = super::extract_envelope_from_eml(eml, account_id, mailbox_id)
+                .await
+                .expect("first ingest");
+            assert!(matches!(first, super::ExtractOutcome::Imported));
+            let after_first = Account::get(account_id).unwrap().imap_uid_next;
+            assert_eq!(
+                after_first,
+                crate::archive::imap::stable_uid::UID_BLOCK + 1,
+                "the first ingest must reserve a block, i.e. hand out UID 1"
+            );
+
+            // The same bytes again: dedup short-circuits before the UID is
+            // assigned, so the counter must not move.
+            let second = super::extract_envelope_from_eml(eml, account_id, mailbox_id)
+                .await
+                .expect("second ingest");
+            assert!(matches!(second, super::ExtractOutcome::Duplicate));
+            assert_eq!(
+                Account::get(account_id).unwrap().imap_uid_next,
+                after_first,
+                "a duplicate must not consume a UID"
+            );
         });
     }
 

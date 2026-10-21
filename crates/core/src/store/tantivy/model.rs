@@ -61,7 +61,10 @@ mod attachment_storage_tests {
     #[test]
     fn deletion_references_follow_raw_and_legacy_blob_keys() {
         let envelope = EnvelopeWithAttachments {
-            envelope: Envelope::default(),
+            envelope: Envelope {
+                imap_uid: 1,
+                ..Default::default()
+            },
             attachments: Some(vec![
                 AttachmentInfo {
                     content_hash: "decoded-file".into(),
@@ -81,11 +84,55 @@ mod attachment_storage_tests {
             .collect();
         assert_eq!(keys, vec!["encoded-body", "legacy-body"]);
     }
+
+    /// No write path may index a document without a stable UID. Zero is not a
+    /// valid IMAP UID, and the IMAP server sorts a mailbox by that field, so it
+    /// would be served to clients as UID 0. The refusal here is what turns a
+    /// forgotten assignment into an immediate error at the offending path.
+    #[test]
+    fn a_document_without_a_stable_uid_is_refused() {
+        let envelope = EnvelopeWithAttachments {
+            envelope: Envelope::default(),
+            attachments: None,
+        };
+        let err = envelope
+            .to_document("", 0)
+            .expect_err("imap_uid 0 must not be indexable");
+        assert!(
+            format!("{err:?}").contains("no stable IMAP UID"),
+            "unexpected error: {err:?}"
+        );
+
+        // The same document with an assigned UID is fine.
+        let envelope = EnvelopeWithAttachments {
+            envelope: Envelope {
+                imap_uid: 7,
+                ..Default::default()
+            },
+            attachments: None,
+        };
+        assert!(envelope.to_document("", 0).is_ok());
+    }
 }
 
 impl EnvelopeWithAttachments {
     pub fn to_document(&self, body_text: &str, shard_id: u64) -> BichonResult<TantivyDocument> {
         let fields = SchemaTools::email_fields();
+        // A document must never reach the index without a stable UID. 0 is not a
+        // valid IMAP UID (RFC 3501), and `ordered_mailbox_uids` sorts by that
+        // field, so a zero would be served to clients as UID 0. Refusing here
+        // turns "a write path forgot to assign one" into an immediate error at
+        // that path instead of a document only a later audit notices.
+        if self.envelope.imap_uid == 0 {
+            return Err(raise_error!(
+                format!(
+                    "envelope {} has no stable IMAP UID (0); assign one with \
+                     archive::imap::stable_uid::next_uid before writing it",
+                    self.envelope.id
+                ),
+                ErrorCode::InternalError
+            ));
+        }
         let mut doc = TantivyDocument::new();
 
         doc.add_text(fields.f_id, &self.envelope.id);

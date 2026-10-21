@@ -42,4 +42,33 @@ pub(crate) mod test_support {
     /// this lock for the duration of its writes.
     pub(crate) static GLOBAL_INDEX_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
         std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+    /// A fresh data root for one test process.
+    ///
+    /// Deliberately **not** keyed on the pid alone: Windows recycles pids, so a
+    /// later run can land on a previous run's directory and inherit its data —
+    /// including an index built by an older schema generation, which then fails
+    /// in unrelated tests with a confusing "field not found". Modules add a
+    /// per-process nonce so a recycled pid always starts from an empty root.
+    pub(crate) fn unique_test_root(prefix: &str) -> std::path::PathBuf {
+        // Stable per (process, prefix): callers hold the result for the whole
+        // test, and a second call must not mint a second root.
+        static ROOTS: std::sync::LazyLock<
+            std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>>,
+        > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+        let mut roots = ROOTS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = roots.get(prefix) {
+            return existing.clone();
+        }
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create the test data root");
+        roots.insert(prefix.to_string(), root.clone());
+        root
+    }
 }
